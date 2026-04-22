@@ -1,0 +1,31 @@
+#!/bin/sh
+
+# PROVIDE: sync_temple
+# REQUIRE: NETWORKING
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="sync_temple"
+rcvar="sync_temple_enable"
+desc="Sync Temple file sync server"
+
+load_rc_config $name
+
+: ${sync_temple_enable:="NO"}
+: ${sync_temple_token:=""}
+: ${sync_temple_addr:=":8787"}
+: ${sync_temple_data:="/var/db/sync_temple"}
+
+pidfile="/var/run/${name}.pid"
+command="/usr/local/bin/sync-temple"
+command_args="--addr ${sync_temple_addr} --token ${sync_temple_token} --data ${sync_temple_data} &"
+
+start_precmd="sync_temple_prestart"
+
+sync_temple_prestart()
+{
+    mkdir -p ${sync_temple_data}
+}
+
+run_rc_command "$1"

@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sync Temple</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0d1117;--surface:#161b22;--border:#30363d;
+  --text:#c9d1d9;--dim:#8b949e;--accent:#58a6ff;
+  --danger:#f85149;--success:#3fb950;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+header{display:flex;justify-content:space-between;align-items:center;padding:10px 20px;border-bottom:1px solid var(--border);background:var(--surface)}
+header h1{font-size:15px;font-weight:600;letter-spacing:0.5px}
+#auth{display:flex;gap:8px;align-items:center}
+input,textarea,button,select{font-family:inherit;font-size:13px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 12px;outline:none}
+input:focus,textarea:focus{border-color:var(--accent)}
+button{cursor:pointer;background:var(--surface);transition:border-color .15s}
+button:hover{border-color:var(--accent)}
+button.primary{background:#238636;border-color:#238636;color:#fff}
+button.primary:hover{background:#2ea043}
+button.danger{color:var(--danger)}
+button.danger:hover{border-color:var(--danger)}
+#toolbar{padding:6px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);background:var(--surface);font-size:12px}
+main{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);min-height:calc(100vh - 90px)}
+.channel{background:var(--bg);padding:16px;display:flex;flex-direction:column;gap:12px}
+.channel h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
+.drop-zone{border:2px dashed var(--border);border-radius:8px;padding:28px 16px;text-align:center;color:var(--dim);cursor:pointer;transition:all .2s;font-size:13px}
+.drop-zone:hover,.drop-zone.dragover{border-color:var(--accent);color:var(--accent);background:rgba(88,166,255,.04)}
+.drop-zone label{cursor:pointer;color:var(--accent);text-decoration:underline}
+.drop-zone input[type=file]{display:none}
+.status-bar{font-size:12px;color:var(--dim);min-height:18px;transition:color .3s}
+.file-list{flex:1;overflow-y:auto;max-height:280px;font-size:11px;font-family:'SF Mono','Fira Code','Cascadia Code',monospace;background:var(--surface);border-radius:6px;padding:8px 10px;line-height:1.7}
+.file-list .f{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.file-list .f .sz{color:var(--border);margin-left:6px}
+.file-list em{color:var(--border)}
+.actions{display:flex;gap:8px;align-items:center}
+.actions .count{font-size:11px;color:var(--dim);margin-left:auto}
+.text-section{display:flex;flex-direction:column;gap:6px}
+.text-section h3{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:0.5px}
+.text-section textarea{min-height:90px;resize:vertical;font-family:'SF Mono','Fira Code',monospace;font-size:12px;line-height:1.5}
+.text-actions{display:flex;gap:8px}
+.modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;align-items:center;justify-content:center}
+.modal.active{display:flex}
+.modal-body{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;width:420px;max-width:90vw}
+.modal-body h3{margin-bottom:10px;font-size:14px}
+.modal-body p{font-size:12px;color:var(--dim);margin-bottom:8px}
+.modal-body textarea{width:100%;font-family:'SF Mono',monospace;font-size:12px}
+.modal-actions{display:flex;gap:8px;margin-top:12px;justify-content:flex-end}
+@media(max-width:768px){main{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Sync Temple</h1>
+  <div id="auth">
+    <input type="password" id="token-input" placeholder="token" autocomplete="off" style="width:220px" />
+    <button onclick="connect()" class="primary">Connect</button>
+  </div>
+</header>
+
+<div id="app" style="display:none">
+  <div id="toolbar">
+    <span id="conn-status"></span>
+    <div style="display:flex;gap:12px;align-items:center">
+      <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer">
+        <input type="checkbox" id="sync-all-check" onchange="toggleSyncAll()" /> Sync All
+      </label>
+      <button onclick="showIgnoreModal()" style="font-size:11px;padding:3px 10px">Ignore Patterns</button>
+    </div>
+  </div>
+  <main>
+    <div class="channel" id="ch-a">
+      <h2>Channel A</h2>
+      <div class="drop-zone" id="drop-a">
+        Drop folder here or <label>browse<input type="file" id="input-a" webkitdirectory multiple /></label>
+      </div>
+      <div class="status-bar" id="status-a"></div>
+      <div class="file-list" id="files-a"><em>empty</em></div>
+      <div class="actions">
+        <button onclick="downloadAll('a')">Download ZIP</button>
+        <button onclick="clearChannel('a')" class="danger">Clear</button>
+        <span class="count" id="count-a"></span>
+      </div>
+      <div class="text-section">
+        <h3>Quick Text</h3>
+        <textarea id="text-a" placeholder="Paste logs, notes, errors..."></textarea>
+        <div class="text-actions">
+          <button onclick="pushText('a')">Push</button>
+          <button onclick="pullText('a')">Pull</button>
+        </div>
+      </div>
+    </div>
+    <div class="channel" id="ch-b">
+      <h2>Channel B</h2>
+      <div class="drop-zone" id="drop-b">
+        Drop folder here or <label>browse<input type="file" id="input-b" webkitdirectory multiple /></label>
+      </div>
+      <div class="status-bar" id="status-b"></div>
+      <div class="file-list" id="files-b"><em>empty</em></div>
+      <div class="actions">
+        <button onclick="downloadAll('b')">Download ZIP</button>
+        <button onclick="clearChannel('b')" class="danger">Clear</button>
+        <span class="count" id="count-b"></span>
+      </div>
+      <div class="text-section">
+        <h3>Quick Text</h3>
+        <textarea id="text-b" placeholder="Paste logs, notes, errors..."></textarea>
+        <div class="text-actions">
+          <button onclick="pushText('b')">Push</button>
+          <button onclick="pullText('b')">Pull</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="modal" id="ignore-modal">
+  <div class="modal-body">
+    <h3>Ignore Patterns</h3>
+    <p>One per line. Matches directory names, filenames, or *.ext globs.</p>
+    <textarea id="ignore-input" rows="16"></textarea>
+    <div class="modal-actions">
+      <button onclick="closeIgnoreModal()">Cancel</button>
+      <button onclick="saveIgnore()" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const DEFAULT_IGNORE = [
+  // deps / bundled runtimes
+  'node_modules','venv','.venv','archive',
+  // build output
+  'build','dist','target','obj',
+  // gradle/kotlin/android
+  '.gradle','.kotlin',
+  // platformio
+  '.pio',
+  // sveltekit
+  '.svelte-kit',
+  // unity
+  'Library','UserSettings',
+  // ide
+  '.idea','.vscode','.vs','xcuserdata',
+  // caches
+  '.cache','.next','.turbo','.parcel-cache',
+  'coverage','__pycache__','.pytest_cache',
+  'artwork_cache','transcode_cache',
+  // files
+  '.DS_Store','local.properties','.env',
+  '*.pyc','*.o','*.a','*.so','*.dylib',
+  '*.class','*.jar','*.apk','*.elf','*.iml','*.log',
+  '*.db',
+  '*.m4a','*.mp3','*.flac','*.pcm','*.wav','*.ogg',
+  '*.png','*.jpg','*.jpeg','*.gif','*.ico','*.svg',
+  '*.pdf','*.blend'
+];
+
+let token = '';
+let ignorePatterns = JSON.parse(localStorage.getItem('sync_ignore') || 'null') || [...DEFAULT_IGNORE];
+let syncAll = localStorage.getItem('sync_all') === 'true';
+let eventSources = {};
+
+// --- Auth ---
+
+function connect() {
+  token = document.getElementById('token-input').value.trim();
+  if (!token) return;
+  sessionStorage.setItem('sync_token', token);
+  api('GET', '/api/a/files').then(() => {
+    document.getElementById('auth').innerHTML = '<span style="color:var(--success);font-size:12px">connected</span>';
+    document.getElementById('app').style.display = '';
+    document.getElementById('conn-status').innerHTML = '<span style="color:var(--success)">&#9679;</span> connected';
+    document.getElementById('sync-all-check').checked = syncAll;
+    initChannels();
+  }).catch(() => {
+    alert('Connection failed. Check token and server URL.');
+  });
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  token = sessionStorage.getItem('sync_token') || '';
+  if (token) {
+    document.getElementById('token-input').value = token;
+    connect();
+  }
+  document.getElementById('ignore-input').value = ignorePatterns.join('\n');
+
+  for (const ch of ['a','b']) {
+    const zone = document.getElementById('drop-' + ch);
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+    zone.addEventListener('drop', async e => {
+      e.preventDefault();
+      zone.classList.remove('dragover');
+      const files = await getFilesFromDrop(e.dataTransfer);
+      if (files.length) uploadFiles(ch, files);
+    });
+    document.getElementById('input-' + ch).addEventListener('change', function() {
+      const files = getFilesFromInput(this.files);
+      if (files.length) uploadFiles(ch, files);
+      this.value = '';
+    });
+  }
+});
+
+// --- API ---
+
+async function api(method, path, body, extraHeaders) {
+  const headers = { 'Authorization': 'Bearer ' + token };
+  if (extraHeaders) Object.assign(headers, extraHeaders);
+  const opts = { method, headers };
+  if (body !== undefined) {
+    if (body instanceof FormData) {
+      opts.body = body;
+    } else if (typeof body === 'object' && !(body instanceof Blob)) {
+      opts.body = JSON.stringify(body);
+      headers['Content-Type'] = 'application/json';
+    } else {
+      opts.body = body;
+    }
+  }
+  const resp = await fetch(path, opts);
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  return resp;
+}
+
+// --- Ignore ---
+
+function toggleSyncAll() {
+  syncAll = document.getElementById('sync-all-check').checked;
+  localStorage.setItem('sync_all', syncAll);
+}
+
+function isIgnored(path) {
+  const parts = path.split('/');
+  const fname = parts[parts.length - 1];
+  
+  // ALWAYS ignore .claude/worktrees, .claude/sessions, .claude/threads (even with Sync All)
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (parts[i] === 'worktrees' && i > 0 && parts[i-1] === '.claude') return true;
+    if (parts[i] === 'sessions' && i > 0 && parts[i-1] === '.claude') return true;
+    if (parts[i] === 'threads' && i > 0 && parts[i-1] === '.claude') return true;
+  }
+  
+  if (syncAll) return false;
+  
+  for (const pat of ignorePatterns) {
+    if (!pat || pat.startsWith('#')) continue;
+    if (pat.startsWith('*.')) {
+      if (fname.endsWith(pat.slice(1))) return true;
+    } else {
+      if (parts.includes(pat)) return true;
+      if (fname === pat) return true;
+    }
+  }
+  return false;
+}
+
+// --- Hashing ---
+
+async function sha256(buffer) {
+  const hash = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+// --- File reading ---
+
+function getFilesFromInput(fileList) {
+  const out = [];
+  for (const file of fileList) {
+    // webkitRelativePath is "Folder/sub/file.txt"
+    const parts = file.webkitRelativePath.split('/');
+    if (parts.length <= 1) continue;
+    const path = parts.slice(1).join('/');
+    if (path && !isIgnored(path)) {
+      out.push({ file, path });
+    }
+  }
+  return out;
+}
+
+async function traverseEntry(entry, basePath) {
+  if (entry.isFile) {
+    return new Promise((resolve, reject) => {
+      entry.file(
+        f => resolve([{ file: f, path: basePath + f.name }]),
+        e => { console.warn('File read error:', basePath + entry.name, e); resolve([]); }
+      );
+    });
+  }
+  if (entry.isDirectory) {
+    const reader = entry.createReader();
+    let results = [];
+    while (true) {
+      const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+      if (batch.length === 0) break;
+      for (const child of batch) {
+        const childFiles = await traverseEntry(child, basePath + entry.name + '/');
+        results.push(...childFiles);
+      }
+    }
+    return results;
+  }
+  return [];
+}
+
+async function getFilesFromDrop(dt) {
+  const allFiles = [];
+  for (const item of dt.items) {
+    const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
+    if (!entry) continue;
+    
+    const files = await traverseEntry(entry, '');
+    // If we dropped a folder "Foo", paths are "Foo/bar.txt"
+    // We want the remote path to be "bar.txt"
+    const prefix = entry.isDirectory ? entry.name + '/' : '';
+    
+    for (const f of files) {
+      const path = prefix ? f.path.slice(prefix.length) : f.path;
+      if (path && !isIgnored(path)) {
+        allFiles.push({ file: f.file, path });
+      }
+    }
+  }
+  return allFiles;
+}
+
+// --- Upload with diff ---
+
+async function uploadFiles(ch, files) {
+  const status = document.getElementById('status-' + ch);
+  status.style.color = '';
+  try {
+    // Hash
+    status.textContent = 'Hashing ' + files.length + ' files...';
+    const manifest = {};
+    let hashErrors = 0;
+    let skippedFiles = [];
+    for (let i = 0; i < files.length; i++) {
+      try {
+        manifest[files[i].path] = await sha256(await files[i].file.arrayBuffer());
+      } catch (e) {
+        hashErrors++;
+        skippedFiles.push(files[i].path);
+        console.warn('Hash error for', files[i].path, e);
+      }
+      if (i % 10 === 0 || i === files.length - 1) {
+        status.textContent = 'Hashing ' + (i+1) + '/' + files.length + '...';
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+    if (hashErrors > 0) {
+      console.warn('Skipped files due to I/O errors:', skippedFiles);
+      status.textContent = hashErrors + ' files skipped (I/O error), uploading ' + manifest.length + '...';
+    }
+
+    // Diff
+    status.textContent = 'Computing diff...';
+    const diff = await api('POST', '/api/' + ch + '/diff', { files: manifest }).then(r => r.json());
+    const toUpload = [...(diff.client_only||[]), ...(diff.different||[])];
+    const same = diff.same || 0;
+
+    if (toUpload.length === 0) {
+      status.textContent = 'No changes. ' + same + ' files identical.';
+      status.style.color = 'var(--success)';
+      return;
+    }
+
+    // Upload in batches (stay under Cloudflare's 100MB limit)
+    const BATCH_MAX = 15 * 1024 * 1024; // 15MB per request (multipart overhead)
+    let uploaded = 0;
+    let batchNum = 0;
+    let fd = new FormData();
+    let batchSize = 0;
+
+    for (const p of toUpload) {
+      const entry = files.find(f => f.path === p);
+      if (!entry) continue;
+      try {
+        fd.append(p, entry.file);
+        batchSize += entry.file.size;
+      } catch (e) {
+        console.warn('Append error for', p, e);
+        continue;
+      }
+
+      if (batchSize >= BATCH_MAX) {
+        batchNum++;
+        status.textContent = 'Uploading batch ' + batchNum + '... (' + uploaded + '/' + toUpload.length + ')';
+        const r = await api('POST', '/api/' + ch + '/upload', fd).then(r => r.json());
+        uploaded += r.uploaded || 0;
+        fd = new FormData();
+        batchSize = 0;
+      }
+    }
+    // Final batch
+    if (batchSize > 0) {
+      batchNum++;
+      status.textContent = 'Uploading batch ' + batchNum + '... (' + uploaded + '/' + toUpload.length + ')';
+      const r = await api('POST', '/api/' + ch + '/upload', fd).then(r => r.json());
+      uploaded += r.uploaded || 0;
+    }
+
+    status.textContent = uploaded + ' uploaded, ' + same + ' unchanged';
+    status.style.color = 'var(--success)';
+    refreshFiles(ch);
+  } catch (err) {
+    status.textContent = 'Error: ' + err.message;
+    status.style.color = 'var(--danger)';
+  }
+}
+
+// --- Channel ops ---
+
+async function refreshFiles(ch) {
+  try {
+    const files = await api('GET', '/api/' + ch + '/files').then(r => r.json());
+    const el = document.getElementById('files-' + ch);
+    const paths = Object.keys(files).sort();
+    document.getElementById('count-' + ch).textContent = paths.length + ' files';
+    if (!paths.length) { el.innerHTML = '<em>empty</em>'; return; }
+    el.innerHTML = paths.map(p => {
+      const info = files[p];
+      const sz = typeof info === 'object' ? fmtSize(info.size) : '';
+      return '<div class="f">' + esc(p) + (sz ? '<span class="sz">' + sz + '</span>' : '') + '</div>';
+    }).join('');
+  } catch(e) { console.error(e); }
+}
+
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function fmtSize(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+  return (n/1048576).toFixed(1) + ' MB';
+}
+
+function downloadAll(ch) {
+  const a = document.createElement('a');
+  a.href = '/api/' + ch + '/download?token=' + encodeURIComponent(token);
+  a.download = 'channel_' + ch + '.zip';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+async function clearChannel(ch) {
+  if (!confirm('Clear all files and text in Channel ' + ch.toUpperCase() + '?')) return;
+  await api('DELETE', '/api/' + ch + '/files');
+  refreshFiles(ch);
+  document.getElementById('text-' + ch).value = '';
+  document.getElementById('status-' + ch).textContent = 'Cleared.';
+}
+
+async function pushText(ch) {
+  const text = document.getElementById('text-' + ch).value;
+  await api('POST', '/api/' + ch + '/text', text, { 'Content-Type': 'text/plain' });
+  const st = document.getElementById('status-' + ch);
+  st.textContent = 'Text pushed (' + text.length + ' chars).';
+  st.style.color = 'var(--success)';
+}
+
+async function pullText(ch) {
+  const resp = await api('GET', '/api/' + ch + '/text');
+  const text = await resp.text();
+  document.getElementById('text-' + ch).value = text;
+  const st = document.getElementById('status-' + ch);
+  st.textContent = 'Text pulled (' + text.length + ' chars).';
+  st.style.color = 'var(--success)';
+}
+
+// --- SSE live updates ---
+
+function connectSSE(ch) {
+  if (eventSources[ch]) eventSources[ch].close();
+  const es = new EventSource('/api/' + ch + '/events?token=' + encodeURIComponent(token));
+  es.onmessage = () => refreshFiles(ch);
+  es.onerror = () => {
+    es.close();
+    setTimeout(() => connectSSE(ch), 5000);
+  };
+  eventSources[ch] = es;
+}
+
+function initChannels() {
+  for (const ch of ['a','b']) {
+    refreshFiles(ch);
+    connectSSE(ch);
+  }
+}
+
+// --- Ignore modal ---
+
+function showIgnoreModal() {
+  document.getElementById('ignore-input').value = ignorePatterns.join('\n');
+  document.getElementById('ignore-modal').classList.add('active');
+}
+function closeIgnoreModal() {
+  document.getElementById('ignore-modal').classList.remove('active');
+}
+function saveIgnore() {
+  ignorePatterns = document.getElementById('ignore-input').value.split('\n').map(s => s.trim()).filter(s => s);
+  localStorage.setItem('sync_ignore', JSON.stringify(ignorePatterns));
+  closeIgnoreModal();
+}
+</script>
+</body>
+</html>

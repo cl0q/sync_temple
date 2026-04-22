@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""Sync Temple CLI — fast bidirectional file sync."""
+
+import argparse
+import hashlib
+import json
+import os
+import ssl
+import sys
+import urllib.request
+import urllib.error
+import zipfile
+import io
+import fnmatch
+
+SSL_CTX = ssl.create_default_context()
+USER_AGENT = 'SyncTemple/1.0'
+
+IGNORE_DIRS = {
+    # Dependencies / bundled runtimes
+    'node_modules', 'venv', '.venv', 'archive',
+    # Build output
+    'build', 'dist', 'target', 'obj',
+    # Gradle / Kotlin / Android
+    '.gradle', '.kotlin',
+    # PlatformIO
+    '.pio',
+    # SvelteKit
+    '.svelte-kit',
+    # Unity
+    'Library', 'UserSettings',
+    # IDE
+    '.idea', '.vscode', '.vs', 'xcuserdata',
+    # Caches
+    '.cache', '.next', '.turbo', '.parcel-cache',
+    'coverage', '__pycache__', '.pytest_cache',
+    'artwork_cache', 'transcode_cache',
+}
+IGNORE_FILES = {'.DS_Store', 'local.properties'}
+IGNORE_GLOBS = {
+    '*.pyc', '*.o', '*.a', '*.so', '*.dylib',
+    '*.class', '*.jar', '*.apk', '*.elf', '*.iml',
+    '*.log', '*.db',
+    # Media
+    '*.m4a', '*.mp3', '*.flac', '*.pcm', '*.wav', '*.ogg',
+    '*.png', '*.jpg', '*.jpeg', '*.gif', '*.ico', '*.svg',
+    '*.pdf', '*.blend',
+}
+
+
+def get_env():
+    url = os.environ.get('SYNC_TEMPLE_URL', '').rstrip('/')
+    token = os.environ.get('SYNC_TEMPLE_TOKEN', '')
+    if not url:
+        print('Set SYNC_TEMPLE_URL (e.g. https://sync.example.com)', file=sys.stderr)
+        sys.exit(1)
+    if not token:
+        print('Set SYNC_TEMPLE_TOKEN', file=sys.stderr)
+        sys.exit(1)
+    return url, token
+
+
+def should_ignore(rel_path, ignore_enabled=True):
+    parts = rel_path.replace(os.sep, '/').split('/')
+    fname = parts[-1]
+    
+    # ALWAYS ignore .claude/worktrees, .claude/sessions, .claude/threads (even with --all)
+    for i, p in enumerate(parts[:-1]):
+        if p == 'worktrees' and i > 0 and parts[i-1] == '.claude':
+            return True
+        if p == 'sessions' and i > 0 and parts[i-1] == '.claude':
+            return True
+        if p == 'threads' and i > 0 and parts[i-1] == '.claude':
+            return True
+    
+    if not ignore_enabled:
+        return False
+    
+    for p in parts[:-1]:
+        if p in IGNORE_DIRS:
+            return True
+    if fname in IGNORE_FILES or fname in IGNORE_DIRS:
+        return True
+    for g in IGNORE_GLOBS:
+        if fnmatch.fnmatch(fname, g):
+            return True
+    return False
+
+
+# --- HTTP helpers ---
+
+def request(method, path, body=None, headers=None, raw=False):
+    url, token = get_env()
+    hdrs = {'Authorization': f'Bearer {token}', 'User-Agent': USER_AGENT}
+    if headers:
+        hdrs.update(headers)
+    if isinstance(body, dict):
+        body = json.dumps(body).encode()
+        hdrs['Content-Type'] = 'application/json'
+    elif isinstance(body, str):
+        body = body.encode()
+    req = urllib.request.Request(f'{url}{path}', data=body, method=method, headers=hdrs)
+    try:
+        resp = urllib.request.urlopen(req, context=SSL_CTX)
+        return resp if raw else resp.read()
+    except urllib.error.HTTPError as e:
+        print(f'Error: HTTP {e.code} — {e.read().decode()}', file=sys.stderr)
+        sys.exit(1)
+
+
+def json_req(method, path, body=None):
+    return json.loads(request(method, path, body))
+
+
+def multipart_upload(path, files_data):
+    url, token = get_env()
+    boundary = f'----SyncTemple{os.urandom(8).hex()}'
+    body = b''
+    for fpath, data in files_data.items():
+        body += f'--{boundary}\r\n'.encode()
+        body += f'Content-Disposition: form-data; name="{fpath}"; filename="{os.path.basename(fpath)}"\r\n'.encode()
+        body += b'Content-Type: application/octet-stream\r\n\r\n'
+        body += data + b'\r\n'
+    body += f'--{boundary}--\r\n'.encode()
+    req = urllib.request.Request(f'{url}{path}', data=body, method='POST', headers={
+        'Authorization': f'Bearer {token}',
+        'Content-Type': f'multipart/form-data; boundary={boundary}',
+        'User-Agent': USER_AGENT,
+    })
+    try:
+        return json.loads(urllib.request.urlopen(req, context=SSL_CTX).read())
+    except urllib.error.HTTPError as e:
+        print(f'Error: HTTP {e.code} — {e.read().decode()}', file=sys.stderr)
+        sys.exit(1)
+
+
+# --- Scanning ---
+
+def scan_dir(directory, ignore_enabled=True):
+    manifest = {}
+    for dirpath, dirnames, filenames in os.walk(directory):
+        if ignore_enabled:
+            dirnames[:] = sorted(d for d in dirnames if d not in IGNORE_DIRS)
+        else:
+            dirnames.sort()
+
+        for f in sorted(filenames):
+            full = os.path.join(dirpath, f)
+            rel = os.path.relpath(full, directory).replace(os.sep, '/')
+            if should_ignore(rel, ignore_enabled):
+                continue
+            with open(full, 'rb') as fh:
+                h = hashlib.sha256(fh.read()).hexdigest()
+            manifest[rel] = h
+    return manifest
+
+
+# --- Commands ---
+
+def cmd_push(args):
+    ch, directory = args.channel, args.directory
+    if not os.path.isdir(directory):
+        print(f'Not a directory: {directory}', file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Scanning {directory} (ignore={'on' if not args.all else 'off'})...")
+    manifest = scan_dir(directory, not args.all)
+    print(f'  {len(manifest)} files')
+
+    print('Diffing...')
+    diff = json_req('POST', f'/api/{ch}/diff', {'files': manifest})
+    to_upload = (diff.get('client_only') or []) + (diff.get('different') or [])
+    same = diff.get('same', 0)
+    server_only = diff.get('server_only') or []
+
+    if not to_upload and not (args.sync and server_only):
+        print(f'  No changes. {same} identical.')
+        return
+
+    if to_upload:
+        print(f'  Uploading {len(to_upload)} files...')
+        batch = {}
+        uploaded = 0
+        for path in to_upload:
+            full = os.path.join(directory, path.replace('/', os.sep))
+            if not os.path.isfile(full):
+                continue
+            with open(full, 'rb') as f:
+                batch[path] = f.read()
+            if len(batch) >= 50:
+                r = multipart_upload(f'/api/{ch}/upload', batch)
+                uploaded += r.get('uploaded', 0)
+                batch = {}
+        if batch:
+            r = multipart_upload(f'/api/{ch}/upload', batch)
+            uploaded += r.get('uploaded', 0)
+        print(f'  {uploaded} uploaded')
+
+    if args.sync and server_only:
+        print(f'  Deleting {len(server_only)} server-only files...')
+        json_req('POST', f'/api/{ch}/delete', {'files': server_only})
+
+    print(f'  Done. {same} unchanged.')
+
+
+def cmd_pull(args):
+    ch, directory = args.channel, args.directory
+    os.makedirs(directory, exist_ok=True)
+
+    print(f"Scanning {directory} (ignore={'on' if not args.all else 'off'})...")
+    local = scan_dir(directory, not args.all) if os.path.isdir(directory) else {}
+    print(f'  {len(local)} local files')
+
+    print('Diffing...')
+    diff = json_req('POST', f'/api/{ch}/diff', {'files': local})
+    to_download = (diff.get('server_only') or []) + (diff.get('different') or [])
+    client_only = diff.get('client_only') or []
+    same = diff.get('same', 0)
+
+    if not to_download and not (args.sync and client_only):
+        print(f'  No changes. {same} identical.')
+        return
+
+    if to_download:
+        print(f'  Downloading {len(to_download)} files...')
+        data = request('POST', f'/api/{ch}/download', {'files': to_download})
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                target = os.path.join(directory, info.filename.replace('/', os.sep))
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with zf.open(info) as src, open(target, 'wb') as dst:
+                    dst.write(src.read())
+        print(f'  {len(to_download)} downloaded')
+
+    if args.sync and client_only:
+        print(f'  Deleting {len(client_only)} local-only files...')
+        for path in client_only:
+            full = os.path.join(directory, path.replace('/', os.sep))
+            if os.path.isfile(full):
+                os.remove(full)
+
+    print(f'  Done. {same} unchanged.')
+
+
+def cmd_text_push(args):
+    if args.file == '-':
+        data = sys.stdin.buffer.read()
+    else:
+        with open(args.file, 'rb') as f:
+            data = f.read()
+    request('POST', f'/api/{args.channel}/text', data, {'Content-Type': 'text/plain'})
+    print(f'Pushed {len(data)} bytes to channel {args.channel}.')
+
+
+def cmd_text_pull(args):
+    data = request('GET', f'/api/{args.channel}/text')
+    sys.stdout.buffer.write(data)
+
+
+def cmd_files(args):
+    files = json_req('GET', f'/api/{args.channel}/files')
+    total_size = 0
+    for path in sorted(files.keys()):
+        info = files[path]
+        if isinstance(info, dict):
+            sz = info.get('size', 0)
+            total_size += sz
+            print(f'  {path}  ({fmt_size(sz)})')
+        else:
+            print(f'  {path}')
+    print(f'\n  {len(files)} files, {fmt_size(total_size)} total')
+
+
+def cmd_clear(args):
+    if not args.yes:
+        ans = input(f'Clear channel {args.channel}? [y/N] ')
+        if ans.lower() != 'y':
+            print('Cancelled.')
+            return
+    json_req('DELETE', f'/api/{args.channel}/files')
+    print(f'Channel {args.channel} cleared.')
+
+
+def fmt_size(n):
+    for u in ['B', 'KB', 'MB', 'GB']:
+        if n < 1024:
+            return f'{n:.0f} {u}' if u == 'B' else f'{n:.1f} {u}'
+        n /= 1024
+    return f'{n:.1f} TB'
+
+
+def main():
+    p = argparse.ArgumentParser(
+        description='Sync Temple CLI',
+        epilog='Environment: SYNC_TEMPLE_URL, SYNC_TEMPLE_TOKEN')
+    sub = p.add_subparsers(dest='cmd', required=True)
+
+    s = sub.add_parser('push', help='Push directory to channel')
+    s.add_argument('channel', choices=['a', 'b'])
+    s.add_argument('directory')
+    s.add_argument('--sync', action='store_true', help='Also delete server files not present locally')
+    s.add_argument('--all', action='store_true', help='Upload all files, bypassing ignore patterns')
+
+    s = sub.add_parser('pull', help='Pull channel files to directory')
+    s.add_argument('channel', choices=['a', 'b'])
+    s.add_argument('directory')
+    s.add_argument('--sync', action='store_true', help='Also delete local files not on server')
+    s.add_argument('--all', action='store_true', help='Include all files when scanning local directory')
+
+    s = sub.add_parser('text-push', help='Push text (file or stdin) to channel')
+    s.add_argument('channel', choices=['a', 'b'])
+    s.add_argument('file', nargs='?', default='-', help='File path or - for stdin (default: stdin)')
+
+    s = sub.add_parser('text-pull', help='Pull text from channel to stdout')
+    s.add_argument('channel', choices=['a', 'b'])
+
+    s = sub.add_parser('files', help='List files in channel')
+    s.add_argument('channel', choices=['a', 'b'])
+
+    s = sub.add_parser('clear', help='Clear all files in channel')
+    s.add_argument('channel', choices=['a', 'b'])
+    s.add_argument('-y', '--yes', action='store_true', help='Skip confirmation')
+
+    args = p.parse_args()
+    {'push': cmd_push, 'pull': cmd_pull, 'text-push': cmd_text_push,
+     'text-pull': cmd_text_pull, 'files': cmd_files, 'clear': cmd_clear}[args.cmd](args)
+
+
+if __name__ == '__main__':
+    main()

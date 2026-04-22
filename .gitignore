@@ -1,0 +1,24 @@
+# Compiled binaries
+/sync-temple
+/sync-temple-freebsd
+*.exe
+
+# Runtime data and logs
+/data/
+/LOGS/
+
+# Secrets / tokens (never commit)
+.env
+.env.*
+.secrets
+*.token
+token.txt
+
+# Local editor/tool config
+.claude/settings.local.json
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
