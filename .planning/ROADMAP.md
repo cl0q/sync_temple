@@ -23,7 +23,10 @@ Four phases that take sync_temple from a working-but-fragile prototype to a reli
   3. When a transient network error occurs, the upload retries automatically (up to 3 times) before surfacing the failure
   4. User can resume an interrupted upload from where it left off rather than starting over
   5. Server rejects oversized requests with HTTP 413 and leaves no empty or partial files behind
-**Plans**: TBD
+**Plans**: 3 plans
+- [ ] 01-PLAN.md — Server-side hardening: MaxBytesReader, atomic writes via .tmp+rename, per-file timeout, JSON error responses, extended response shape (UPLOAD-06, UPLOAD-07, UPLOAD-01 server-side)
+- [ ] 02-PLAN.md — Per-file upload queue with concurrency=4, exponential-backoff retry, AbortController cancel, two-tier progress UI, JSON error parsing in api() (UPLOAD-01, UPLOAD-02, UPLOAD-03, UPLOAD-04)
+- [ ] 03-PLAN.md — localStorage-backed resume mechanism with Resume button, re-diff against saved manifest, auto-clear on success (UPLOAD-05)
 **UI hint**: partial
 
 ### Phase 2: CLI Rewrite
