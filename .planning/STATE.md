@@ -1,0 +1,73 @@
+# Project State
+
+## Project Reference
+
+See: .planning/PROJECT.md (updated 2026-05-11)
+
+**Core value:** Beliebig viele Dateien zuverlässig zwischen zwei Endpunkten austauschen — über Web-UI oder CLI — ohne mit unsichtbaren Limits gegen die Wand zu fahren.
+**Current focus:** Phase 1 — Upload Reliability
+
+## Current Position
+
+Phase: 1 of 4 (Upload Reliability)
+Plan: 0 of ? in current phase
+Status: Ready to plan
+Last activity: 2026-05-11 — Roadmap created for milestone M1 "robust"
+
+Progress: [░░░░░░░░░░] 0%
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 0
+- Average duration: -
+- Total execution time: 0 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| - | - | - | - |
+
+**Recent Trend:**
+- Last 5 plans: none yet
+- Trend: -
+
+*Updated after each plan completion*
+
+## Accumulated Context
+
+### Decisions
+
+Decisions are logged in PROJECT.md Key Decisions table.
+Recent decisions affecting current work:
+
+- Upload concurrency throttled client-side (not server-side) — root cause is browser connection pool exhaustion
+- CLI ported to Go — single language, single binary, no Python runtime dependency
+- Server hardened with MaxBytesReader — minimal-invasive, preserves single-binary approach
+
+### Pending Todos
+
+None yet.
+
+### Blockers/Concerns
+
+- Upload bug (WebKitBlobResource error 4) is CRITICAL — blocks core use case until Phase 1 is complete
+- No `go.mod` detected in STACK.md notes — verify before CLI work in Phase 2
+
+## Deferred Items
+
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| Performance | PERF-01 manifest caching | v2 | M1 roadmap |
+| Performance | PERF-02 streaming ZIP | v2 | M1 roadmap |
+| Robustness | ROB-01 SSE heartbeat | v2 | M1 roadmap |
+| Robustness | ROB-02 rate limiting | v2 | M1 roadmap |
+| Robustness | ROB-03 EvalSymlinks | v2 | M1 roadmap |
+| Quality | TEST-01..04 test suite | v2 | M1 roadmap |
+
+## Session Continuity
+
+Last session: 2026-05-11
+Stopped at: Roadmap written, ready to plan Phase 1
+Resume file: None

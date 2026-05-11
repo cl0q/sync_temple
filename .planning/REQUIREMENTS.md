@@ -73,35 +73,33 @@ Bewusst für später aufgehoben — wichtig, aber nicht in dieser Milestone.
 
 ## Traceability
 
-<!-- Wird durch /gsd-plan-phase und ROADMAP.md gefüllt. -->
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| UPLOAD-01 | TBD | Pending |
-| UPLOAD-02 | TBD | Pending |
-| UPLOAD-03 | TBD | Pending |
-| UPLOAD-04 | TBD | Pending |
-| UPLOAD-05 | TBD | Pending |
-| UPLOAD-06 | TBD | Pending |
-| UPLOAD-07 | TBD | Pending |
-| CLI-01 | TBD | Pending |
-| CLI-02 | TBD | Pending |
-| CLI-03 | TBD | Pending |
-| CLI-04 | TBD | Pending |
-| CLI-05 | TBD | Pending |
-| CLI-06 | TBD | Pending |
-| CLI-07 | TBD | Pending |
-| UI-01 | TBD | Pending |
-| UI-02 | TBD | Pending |
-| UI-03 | TBD | Pending |
-| UI-04 | TBD | Pending |
-| UI-05 | TBD | Pending |
+| UPLOAD-01 | Phase 1 | Pending |
+| UPLOAD-02 | Phase 1 | Pending |
+| UPLOAD-03 | Phase 1 | Pending |
+| UPLOAD-04 | Phase 1 | Pending |
+| UPLOAD-05 | Phase 1 | Pending |
+| UPLOAD-06 | Phase 1 | Pending |
+| UPLOAD-07 | Phase 1 | Pending |
+| CLI-01 | Phase 2 | Pending |
+| CLI-02 | Phase 2 | Pending |
+| CLI-03 | Phase 2 | Pending |
+| CLI-04 | Phase 3 | Pending |
+| CLI-05 | Phase 3 | Pending |
+| CLI-06 | Phase 3 | Pending |
+| CLI-07 | Phase 2 | Pending |
+| UI-01 | Phase 4 | Pending |
+| UI-02 | Phase 4 | Pending |
+| UI-03 | Phase 4 | Pending |
+| UI-04 | Phase 4 | Pending |
+| UI-05 | Phase 4 | Pending |
 
 **Coverage:**
 - v1 requirements: 19 total
-- Mapped to phases: 0 (wird durch roadmapper befüllt)
-- Unmapped: 19 ⚠️ (vor Roadmap-Generierung erwartet)
+- Mapped to phases: 19
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-05-11*
-*Last updated: 2026-05-11 after initial definition*
+*Last updated: 2026-05-11 — traceability filled by roadmapper (M1 "robust")*
