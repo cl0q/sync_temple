@@ -3,12 +3,14 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -248,9 +250,18 @@ func (s *server) handleDiff(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	ch := r.PathValue("channel")
+
+	// D-12: enforce 500 MB request cap before any parsing.
+	r.Body = http.MaxBytesReader(w, r.Body, MaxUploadBytes)
+
 	mr, err := r.MultipartReader()
 	if err != nil {
-		http.Error(w, "multipart error: "+err.Error(), http.StatusBadRequest)
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "SIZE_LIMIT", "request exceeds 500 MB")
+			return
+		}
+		writeJSONError(w, http.StatusBadRequest, "BAD_REQUEST", "multipart parse error: "+err.Error())
 		return
 	}
 
@@ -258,42 +269,105 @@ func (s *server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	defer s.locks[ch].Unlock()
 
 	root := s.filesDir(ch)
-	n := 0
+	uploaded := 0
+	failed := 0
+	errs := make([]map[string]string, 0)
+
 	for {
 		part, err := mr.NextPart()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			http.Error(w, "part error: "+err.Error(), http.StatusBadRequest)
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				writeJSONError(w, http.StatusRequestEntityTooLarge, "SIZE_LIMIT", "request exceeds 500 MB")
+				return
+			}
+			writeJSONError(w, http.StatusBadRequest, "BAD_REQUEST", "part error: "+err.Error())
 			return
 		}
+
 		name := part.FormName()
-		clean, ok := safePath(name)
-		if !ok {
-			part.Close()
-			continue
+		code, msg, ok := s.uploadOnePart(r.Context(), root, name, part)
+		if ok {
+			uploaded++
+		} else {
+			failed++
+			errs = append(errs, map[string]string{
+				"file":    name,
+				"code":    code,
+				"message": msg,
+			})
+			log.Printf("upload failed: ch=%s file=%q code=%s msg=%s", ch, name, code, msg)
 		}
-		dest := filepath.Join(root, clean)
-		if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-			part.Close()
-			continue
-		}
-		dst, err := os.Create(dest)
-		if err != nil {
-			part.Close()
-			continue
-		}
-		if _, err := io.Copy(dst, part); err == nil {
-			n++
-		}
-		dst.Close()
 		part.Close()
 	}
 
 	s.notify(ch)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int{"uploaded": n})
+	json.NewEncoder(w).Encode(map[string]any{
+		"uploaded": uploaded,
+		"failed":   failed,
+		"errors":   errs,
+	})
+}
+
+// uploadOnePart streams a single multipart part to <root>/<safePath(name)>.tmp,
+// then atomically renames to the final path. Per-part deadline is PerFileUploadTimeout.
+// Returns (code, message, ok). On ok=false, no file is left on disk for this part.
+func (s *server) uploadOnePart(parentCtx context.Context, root, name string, part io.Reader) (string, string, bool) {
+	clean, ok := safePath(name)
+	if !ok {
+		return "BAD_REQUEST", "invalid path: " + name, false
+	}
+	dest := filepath.Join(root, clean)
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return "INTERNAL", "mkdir: " + err.Error(), false
+	}
+
+	tmp := dest + ".tmp"
+	dst, err := os.Create(tmp)
+	if err != nil {
+		return "INTERNAL", "create tmp: " + err.Error(), false
+	}
+
+	ctx, cancel := context.WithTimeout(parentCtx, PerFileUploadTimeout)
+	defer cancel()
+
+	// Abort io.Copy on context cancellation by closing the part reader.
+	// Closing a multipart.Part causes the next Read to return an error.
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			if pc, ok := part.(io.Closer); ok {
+				pc.Close()
+			}
+		case <-done:
+		}
+	}()
+
+	_, copyErr := io.Copy(dst, part)
+	close(done)
+	closeErr := dst.Close()
+
+	if copyErr != nil || closeErr != nil {
+		os.Remove(tmp)
+		if ctx.Err() == context.DeadlineExceeded {
+			return "TIMEOUT", "per-file timeout exceeded", false
+		}
+		if copyErr != nil {
+			return "INTERNAL", "copy: " + copyErr.Error(), false
+		}
+		return "INTERNAL", "close: " + closeErr.Error(), false
+	}
+
+	if err := os.Rename(tmp, dest); err != nil {
+		os.Remove(tmp)
+		return "INTERNAL", "rename: " + err.Error(), false
+	}
+	return "", "", true
 }
 
 func (s *server) handleDownload(w http.ResponseWriter, r *http.Request) {
