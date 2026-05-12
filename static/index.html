@@ -278,6 +278,8 @@ window.addEventListener('DOMContentLoaded', () => {
       this.value = '';
     });
   }
+  renderResumeButton('a');
+  renderResumeButton('b');
 });
 
 // --- API ---
@@ -685,6 +687,10 @@ async function uploadFiles(ch, files) {
   const status = document.getElementById('status-' + ch);
   status.style.color = '';
 
+  // D-07: starting a new upload clears any prior resume marker for THIS channel.
+  const savedResume = loadResumeState(ch);
+  clearResumeState(ch);
+
   // Cancel any in-flight upload on the same channel
   if (uploadController) {
     try { uploadController.abort(); } catch (_) {}
@@ -700,7 +706,13 @@ async function uploadFiles(ch, files) {
     for (let i = 0; i < files.length; i++) {
       if (uploadController.signal.aborted) throw new Error('cancelled');
       try {
-        manifest[files[i].path] = await sha256(await files[i].file.arrayBuffer());
+        const prev = savedResume && savedResume.manifest && savedResume.manifest[files[i].path];
+        // Reuse saved hash when the user re-selects the same folder; size-stable assumption.
+        if (prev) {
+          manifest[files[i].path] = prev;
+        } else {
+          manifest[files[i].path] = await sha256(await files[i].file.arrayBuffer());
+        }
       } catch (e) {
         hashErrors++;
         skippedFiles.push(files[i].path);
@@ -742,6 +754,8 @@ async function uploadFiles(ch, files) {
       done: 0,
       failed: 0,
       files: new Map(uploadSet.map(e => [e.path, { state: 'pending', attempt: 0, error: '' }])),
+      started_at: new Date().toISOString(),
+      manifest: manifest,
     };
     showUploadProgress(ch);
     renderUploadProgress();
@@ -757,22 +771,26 @@ async function uploadFiles(ch, files) {
       status.textContent = okCount + ' uploaded, ' + same + ' unchanged';
       status.style.color = 'var(--success)';
       hideUploadProgress(ch);
+      clearResumeState(ch);
     } else {
       status.textContent = okCount + ' uploaded, ' + failCount + ' failed, ' + same + ' unchanged';
       status.style.color = 'var(--danger)';
       // Keep progress UI visible so the user can see which files failed.
+      persistResumeState(ch, true);
     }
     refreshFiles(ch);
   } catch (err) {
     if (err.message === 'cancelled' || uploadController?.signal.aborted) {
       status.textContent = 'Upload cancelled.';
       status.style.color = 'var(--danger)';
+      persistResumeState(ch, true);
     } else {
       status.textContent = 'Error: ' + err.message;
       status.style.color = 'var(--danger)';
     }
   } finally {
     uploadController = null;
+    renderResumeButton(ch);
   }
 }
 
@@ -791,11 +809,13 @@ async function runUploadQueue(ch, uploadSet, signal) {
         const st = uploadProgress.files.get(entry.path);
         st.state = 'done';
         uploadProgress.done++;
+        persistResumeState(ch, false);
       } catch (err) {
         const st = uploadProgress.files.get(entry.path);
         st.state = 'failed';
         st.error = err.message || String(err);
         uploadProgress.failed++;
+        persistResumeState(ch, false);
       }
       scheduleProgressRender();
     }
@@ -934,6 +954,82 @@ function cancelUpload(ch) {
   if (uploadController && uploadProgress && uploadProgress.ch === ch) {
     uploadController.abort();
   }
+}
+
+// --- Resume (Plan 03, D-05..D-07) ---
+
+let lastPersistAt = 0;
+
+function resumeKey(ch) {
+  return 'sync_resume_' + ch;
+}
+
+function loadResumeState(ch) {
+  try {
+    const raw = localStorage.getItem(resumeKey(ch));
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+}
+
+function clearResumeState(ch) {
+  localStorage.removeItem(resumeKey(ch));
+  renderResumeButton(ch);
+}
+
+function persistResumeState(ch, force) {
+  const now = Date.now();
+  if (!force && (now - lastPersistAt) < 500) return;
+  lastPersistAt = now;
+  if (!uploadProgress || uploadProgress.ch !== ch) return;
+  const failedPaths = [];
+  for (const [p, st] of uploadProgress.files) {
+    if (st.state === 'failed') failedPaths.push(p);
+  }
+  const payload = {
+    started_at: uploadProgress.started_at,
+    files_total: uploadProgress.total,
+    files_done: uploadProgress.done,
+    files_failed: failedPaths,
+    manifest: uploadProgress.manifest || {},
+  };
+  try {
+    localStorage.setItem(resumeKey(ch), JSON.stringify(payload));
+  } catch (e) {
+    console.warn('persistResumeState failed:', e);
+  }
+  renderResumeButton(ch);
+}
+
+function renderResumeButton(ch) {
+  const zone = document.getElementById('drop-' + ch);
+  if (!zone) return;
+  // Remove any existing resume container
+  const existing = zone.querySelector('.resume-row');
+  if (existing) existing.remove();
+  const state = loadResumeState(ch);
+  if (!state) return;
+  const remaining = (state.files_total || 0) - (state.files_done || 0);
+  const row = document.createElement('div');
+  row.className = 'resume-row';
+  row.style.cssText = 'margin-top:8px;display:flex;gap:8px;align-items:center;justify-content:center;font-size:12px;flex-wrap:wrap';
+  row.innerHTML =
+    '<span style="color:var(--dim)">' + remaining + ' / ' + (state.files_total || 0) + ' files remaining from previous attempt</span>' +
+    '<button class="primary" data-act="resume">Resume (re-select folder)</button>' +
+    '<button data-act="discard">Discard</button>';
+  row.querySelector('[data-act=resume]').addEventListener('click', (e) => { e.stopPropagation(); resumeUpload(ch); });
+  row.querySelector('[data-act=discard]').addEventListener('click', (e) => { e.stopPropagation(); clearResumeState(ch); });
+  zone.appendChild(row);
+}
+
+function resumeUpload(ch) {
+  // Re-enter the existing picker flow. The input change handler runs
+  // openPicker → confirmPicker → uploadFiles, and uploadFiles consumes
+  // the saved resume state to skip re-hashing for unchanged files.
+  const input = document.getElementById('input-' + ch);
+  if (input) input.click();
 }
 
 // --- Channel ops ---
