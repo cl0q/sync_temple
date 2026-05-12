@@ -29,6 +29,22 @@ Four phases that take sync_temple from a working-but-fragile prototype to a reli
 - [ ] 03-PLAN.md — localStorage-backed resume mechanism with Resume button, re-diff against saved manifest, auto-clear on success (UPLOAD-05)
 **UI hint**: partial
 
+### Phase 01.1: Token Persistence (INSERTED)
+
+**Goal:** Server token survives restarts (via SYNC_TEMPLE_TOKEN env var OR a `<dataDir>/.token` file with mode 0600) so the browser session stays valid across server restarts. Frontend handles 401 by clearing the stale token and re-prompting once, instead of spamming N parallel error rows. MANUAL.md documents the env var.
+**Depends on:** Phase 1
+**Requirements**: TOKEN-01..04 (to be defined during planning)
+**Success Criteria** (what must be TRUE):
+  1. Server restart with no `--token` flag re-uses the previous token (from `<dataDir>/.token`) — existing browser session still works
+  2. Setting `SYNC_TEMPLE_TOKEN=...` in the environment overrides the file and the auto-generation
+  3. CLI flag `--token` still wins over env var and file (precedence: flag > env > file > auto-generate)
+  4. When the server returns 401, the browser clears `sessionStorage.sync_token` and prompts the user once — not N times in parallel
+  5. The `.token` file is created with mode 0600 and lives only inside the data dir (never tracked in git)
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 01.1 to break down)
+
 ### Phase 2: CLI Rewrite
 **Goal**: The Python CLI is replaced by a compiled Go binary that resolves paths correctly, validates server connectivity before touching files, and carries a version identifier
 **Depends on**: Phase 1
