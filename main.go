@@ -19,6 +19,15 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
+)
+
+const (
+	// MaxUploadBytes caps a single multipart upload request body. Enforced via http.MaxBytesReader.
+	MaxUploadBytes = 500 << 20 // 500 MB
+
+	// PerFileUploadTimeout is the deadline applied per multipart part during streaming.
+	PerFileUploadTimeout = 5 * time.Minute
 )
 
 //go:embed static/index.html
@@ -173,6 +182,15 @@ func cleanEmptyDirs(root string) {
 			os.Remove(dirs[i])
 		}
 	}
+}
+
+func writeJSONError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error": message,
+		"code":  code,
+	})
 }
 
 // --- Handlers ---
