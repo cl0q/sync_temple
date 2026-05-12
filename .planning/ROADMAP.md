@@ -6,7 +6,7 @@ Four phases that take sync_temple from a working-but-fragile prototype to a reli
 
 ## Phases
 
-- [ ] **Phase 1: Upload Reliability** - Fix the browser upload bug and harden the server — restores core value
+- [x] **Phase 1: Upload Reliability** - Fix the browser upload bug and harden the server — restores core value (completed 2026-05-12)
 - [ ] **Phase 2: CLI Rewrite** - Port CLI from Python to Go with correct path handling and server preflight checks
 - [ ] **Phase 3: CLI Release Pipeline** - Cross-compile, GitHub Actions, distribution, and UX polish
 - [ ] **Phase 4: Web UI Polish** - Visual design, actionable errors, download progress, and mobile support
@@ -68,7 +68,7 @@ Four phases that take sync_temple from a working-but-fragile prototype to a reli
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Upload Reliability | 2/3 | In Progress|  |
+| 1. Upload Reliability | 3/3 | Complete   | 2026-05-12 |
 | 2. CLI Rewrite | 0/? | Not started | - |
 | 3. CLI Release Pipeline | 0/? | Not started | - |
 | 4. Web UI Polish | 0/? | Not started | - |
