@@ -18,8 +18,9 @@ load_rc_config $name
 : ${sync_temple_data:="/var/db/sync_temple"}
 
 pidfile="/var/run/${name}.pid"
-command="/usr/local/bin/sync-temple"
-command_args="--addr ${sync_temple_addr} --token ${sync_temple_token} --data ${sync_temple_data} &"
+procname="/usr/local/bin/sync-temple"
+command="/usr/sbin/daemon"
+command_args="-f -p ${pidfile} -T ${name} -S ${procname} --addr ${sync_temple_addr} --token ${sync_temple_token} --data ${sync_temple_data}"
 
 start_precmd="sync_temple_prestart"
 

@@ -230,8 +230,9 @@ func (s *server) handleDiff(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	ch := r.PathValue("channel")
-	if err := r.ParseMultipartForm(200 << 20); err != nil {
-		http.Error(w, "parse error: "+err.Error(), http.StatusBadRequest)
+	mr, err := r.MultipartReader()
+	if err != nil {
+		http.Error(w, "multipart error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -240,26 +241,36 @@ func (s *server) handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	root := s.filesDir(ch)
 	n := 0
-	for name, fhs := range r.MultipartForm.File {
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			http.Error(w, "part error: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		name := part.FormName()
 		clean, ok := safePath(name)
 		if !ok {
-			continue
-		}
-		src, err := fhs[0].Open()
-		if err != nil {
+			part.Close()
 			continue
 		}
 		dest := filepath.Join(root, clean)
-		os.MkdirAll(filepath.Dir(dest), 0755)
-		dst, err := os.Create(dest)
-		if err != nil {
-			src.Close()
+		if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+			part.Close()
 			continue
 		}
-		io.Copy(dst, src)
+		dst, err := os.Create(dest)
+		if err != nil {
+			part.Close()
+			continue
+		}
+		if _, err := io.Copy(dst, part); err == nil {
+			n++
+		}
 		dst.Close()
-		src.Close()
-		n++
+		part.Close()
 	}
 
 	s.notify(ch)

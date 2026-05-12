@@ -49,6 +49,25 @@ main{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)
 .modal-body p{font-size:12px;color:var(--dim);margin-bottom:8px}
 .modal-body textarea{width:100%;font-family:'SF Mono',monospace;font-size:12px}
 .modal-actions{display:flex;gap:8px;margin-top:12px;justify-content:flex-end}
+.modal-wide{width:720px}
+.tree-summary{font-size:12px;color:var(--dim);margin:6px 0 10px}
+.tree-summary b{color:var(--text)}
+.tree-toolbar{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+.tree-toolbar button{font-size:11px;padding:4px 10px}
+.tree{max-height:50vh;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px;font-family:'SF Mono','Fira Code',monospace;font-size:12px;line-height:1.6}
+.tree-row{display:flex;align-items:center;gap:6px;padding:1px 4px;border-radius:3px;white-space:nowrap}
+.tree-row:hover{background:rgba(88,166,255,.06)}
+.tree-row .caret{display:inline-block;width:12px;text-align:center;color:var(--dim);cursor:pointer;user-select:none;flex-shrink:0}
+.tree-row .caret.leaf{color:var(--border);cursor:default}
+.tree-row input[type=checkbox]{margin:0;cursor:pointer;flex-shrink:0}
+.tree-row .name{cursor:pointer;flex:1;overflow:hidden;text-overflow:ellipsis}
+.tree-row .name.dir{color:var(--accent)}
+.tree-row .meta{color:var(--dim);font-size:11px;flex-shrink:0;margin-left:6px}
+.tree-row .meta.big{color:#d29922}
+.tree-row .meta.huge{color:var(--danger)}
+.tree-children{margin-left:16px;border-left:1px solid var(--border);padding-left:4px}
+.tree-more{color:var(--dim);font-style:italic;padding:2px 4px;font-size:11px;cursor:pointer}
+.tree-more:hover{color:var(--accent)}
 @media(max-width:768px){main{grid-template-columns:1fr}}
 </style>
 </head>
@@ -130,6 +149,25 @@ main{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)
   </div>
 </div>
 
+<div class="modal" id="picker-modal">
+  <div class="modal-body modal-wide">
+    <h3>Select files to sync</h3>
+    <div class="tree-summary" id="picker-summary"></div>
+    <div class="tree-toolbar">
+      <button onclick="pickerSelectAll(true)">Select all</button>
+      <button onclick="pickerSelectAll(false)">Deselect all</button>
+      <button onclick="pickerSkipLargest()">Skip largest folder</button>
+      <button onclick="pickerExpandAll(true)">Expand all</button>
+      <button onclick="pickerExpandAll(false)">Collapse all</button>
+    </div>
+    <div class="tree" id="picker-tree"></div>
+    <div class="modal-actions">
+      <button onclick="closePicker()">Cancel</button>
+      <button onclick="confirmPicker()" class="primary" id="picker-confirm">Upload selected</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const DEFAULT_IGNORE = [
   // deps / bundled runtimes
@@ -198,11 +236,11 @@ window.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       zone.classList.remove('dragover');
       const files = await getFilesFromDrop(e.dataTransfer);
-      if (files.length) uploadFiles(ch, files);
+      if (files.length) openPicker(ch, files);
     });
     document.getElementById('input-' + ch).addEventListener('change', function() {
       const files = getFilesFromInput(this.files);
-      if (files.length) uploadFiles(ch, files);
+      if (files.length) openPicker(ch, files);
       this.value = '';
     });
   }
@@ -328,6 +366,264 @@ async function getFilesFromDrop(dt) {
     }
   }
   return allFiles;
+}
+
+// --- File picker (pre-upload tree) ---
+
+let pickerCh = null;
+let pickerFiles = [];
+let pickerTree = null;
+let pickerExcluded = new Set(); // paths (file or dir) explicitly excluded
+let pickerExpanded = new Set([''/* root */]);
+
+function openPicker(ch, files) {
+  pickerCh = ch;
+  pickerFiles = files;
+  pickerExcluded = new Set();
+  pickerExpanded = new Set(['']);
+  pickerTree = buildTree(files);
+  for (const name of Object.keys(pickerTree.children)) pickerExpanded.add(name);
+  bindPickerEvents();
+  renderPicker();
+  document.getElementById('picker-modal').classList.add('active');
+}
+
+let pickerEventsBound = false;
+function bindPickerEvents() {
+  if (pickerEventsBound) return;
+  pickerEventsBound = true;
+  const tree = document.getElementById('picker-tree');
+  tree.addEventListener('click', e => {
+    const t = e.target;
+    if (t.dataset.act !== 'toggle') return;
+    const path = t.closest('.tree-row')?.dataset.path;
+    if (path === undefined) return;
+    togglePickerExpand(path);
+  });
+  tree.addEventListener('change', e => {
+    const t = e.target;
+    if (t.dataset.act !== 'check') return;
+    const path = t.closest('.tree-row')?.dataset.path;
+    if (path === undefined) return;
+    onPickerCheck(path, t.checked);
+  });
+}
+
+function closePicker() {
+  document.getElementById('picker-modal').classList.remove('active');
+  pickerFiles = [];
+  pickerTree = null;
+}
+
+function buildTree(files) {
+  const root = { name: '', children: {}, isFile: false };
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const seg = parts[i];
+      if (!node.children[seg]) node.children[seg] = { name: seg, children: {}, isFile: false };
+      node = node.children[seg];
+    }
+    const fname = parts[parts.length - 1];
+    node.children[fname] = { name: fname, isFile: true, size: f.file.size, fileEntry: f };
+  }
+  function compute(node) {
+    if (node.isFile) return { size: node.size, count: 1 };
+    let s = 0, c = 0;
+    for (const child of Object.values(node.children)) {
+      const r = compute(child);
+      s += r.size;
+      c += r.count;
+    }
+    node.size = s;
+    node.count = c;
+    return { size: s, count: c };
+  }
+  compute(root);
+  return root;
+}
+
+function isPathExcluded(path) {
+  if (pickerExcluded.has(path)) return true;
+  for (const ex of pickerExcluded) {
+    if (ex && path.startsWith(ex + '/')) return true;
+  }
+  return false;
+}
+
+function pickerStats() {
+  let totalCount = 0, totalSize = 0, selCount = 0, selSize = 0;
+  for (const f of pickerFiles) {
+    totalCount++;
+    totalSize += f.file.size;
+    if (!isPathExcluded(f.path)) {
+      selCount++;
+      selSize += f.file.size;
+    }
+  }
+  return { totalCount, totalSize, selCount, selSize };
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+}
+
+function sizeClass(bytes) {
+  if (bytes >= 1073741824) return 'huge';   // >=1 GB
+  if (bytes >= 104857600) return 'big';     // >=100 MB
+  return '';
+}
+
+// returns 'all' | 'none' | 'some'
+function nodeCheckState(node, path) {
+  if (node.isFile) return isPathExcluded(path) ? 'none' : 'all';
+  let any = false, all = true;
+  for (const [k, child] of Object.entries(node.children)) {
+    const childPath = path ? path + '/' + k : k;
+    const st = nodeCheckState(child, childPath);
+    if (st !== 'none') any = true;
+    if (st !== 'all') all = false;
+  }
+  return all ? 'all' : (any ? 'some' : 'none');
+}
+
+function setNodeChecked(path, checked) {
+  // remove any sub-paths from the excluded set; manage at this level
+  for (const ex of [...pickerExcluded]) {
+    if (ex === path || ex.startsWith(path + '/') || (path && path.startsWith(ex + '/'))) {
+      pickerExcluded.delete(ex);
+    }
+  }
+  if (!checked) pickerExcluded.add(path);
+}
+
+function renderPicker() {
+  const tree = document.getElementById('picker-tree');
+  tree.innerHTML = renderChildren(pickerTree, '');
+  updatePickerSummary();
+}
+
+const RENDER_LIMIT = 300; // cap visible children per folder
+
+function renderChildren(node, path) {
+  const entries = Object.entries(node.children);
+  // sort: dirs first (by size desc), then files (by size desc)
+  entries.sort((a, b) => {
+    if (a[1].isFile !== b[1].isFile) return a[1].isFile ? 1 : -1;
+    return b[1].size - a[1].size;
+  });
+  const limited = entries.length > RENDER_LIMIT ? entries.slice(0, RENDER_LIMIT) : entries;
+  let html = '';
+  for (const [k, child] of limited) {
+    html += renderRow(child, path ? path + '/' + k : k);
+  }
+  if (limited.length < entries.length) {
+    html += `<div class="tree-more">… ${entries.length - limited.length} more items hidden</div>`;
+  }
+  return html;
+}
+
+function renderRow(node, path) {
+  const state = nodeCheckState(node, path);
+  const checked = state === 'all' ? 'checked' : '';
+  const indeterminate = state === 'some' ? 'data-indet="1"' : '';
+  const isDir = !node.isFile;
+  const expanded = pickerExpanded.has(path);
+  const caretChar = isDir ? (expanded ? '▾' : '▸') : '·';
+  const caretCls = isDir ? 'caret' : 'caret leaf';
+  const caretAct = isDir ? 'data-act="toggle"' : '';
+  const sc = sizeClass(node.size);
+  const meta = isDir
+    ? `${node.count} file${node.count === 1 ? '' : 's'}, ${fmtBytes(node.size)}`
+    : fmtBytes(node.size);
+  const nameAct = isDir ? 'data-act="toggle"' : '';
+  const row = `
+    <div class="tree-row" data-path="${escA(path)}">
+      <span class="${caretCls}" ${caretAct}>${caretChar}</span>
+      <input type="checkbox" ${checked} ${indeterminate} data-act="check" />
+      <span class="name ${isDir ? 'dir' : ''}" ${nameAct}>${esc(node.name)}${isDir ? '/' : ''}</span>
+      <span class="meta ${sc}">${meta}</span>
+    </div>`;
+  if (isDir && expanded) {
+    return row + `<div class="tree-children">${renderChildren(node, path)}</div>`;
+  }
+  return row;
+}
+
+function escA(s) { return esc(s).replace(/"/g, '&quot;'); }
+
+function togglePickerExpand(path) {
+  if (pickerExpanded.has(path)) pickerExpanded.delete(path);
+  else pickerExpanded.add(path);
+  renderPicker();
+}
+
+function onPickerCheck(path, checked) {
+  setNodeChecked(path, checked);
+  renderPicker();
+}
+
+function pickerSelectAll(selected) {
+  pickerExcluded = new Set();
+  if (!selected) {
+    for (const name of Object.keys(pickerTree.children)) pickerExcluded.add(name);
+  }
+  renderPicker();
+}
+
+function pickerSkipLargest() {
+  let largest = null, largestSize = -1;
+  for (const [k, child] of Object.entries(pickerTree.children)) {
+    if (!child.isFile && child.size > largestSize) {
+      largest = k;
+      largestSize = child.size;
+    }
+  }
+  if (largest) {
+    pickerExcluded.add(largest);
+    if (!pickerExpanded.has(largest)) pickerExpanded.add(largest);
+    renderPicker();
+  }
+}
+
+function pickerExpandAll(expand) {
+  if (!expand) {
+    pickerExpanded = new Set();
+    renderPicker();
+    return;
+  }
+  pickerExpanded = new Set();
+  function walk(node, path) {
+    if (node.isFile) return;
+    pickerExpanded.add(path);
+    for (const [k, child] of Object.entries(node.children)) {
+      walk(child, path ? path + '/' + k : k);
+    }
+  }
+  walk(pickerTree, '');
+  renderPicker();
+}
+
+function updatePickerSummary() {
+  const s = pickerStats();
+  const el = document.getElementById('picker-summary');
+  el.innerHTML = `<b>${s.selCount.toLocaleString()}</b> / ${s.totalCount.toLocaleString()} files selected — <b>${fmtBytes(s.selSize)}</b> / ${fmtBytes(s.totalSize)} → Channel ${pickerCh.toUpperCase()}`;
+  // Update indeterminate state on checkboxes (can't be set via attribute)
+  for (const cb of document.querySelectorAll('#picker-tree input[type=checkbox]')) {
+    cb.indeterminate = cb.hasAttribute('data-indet');
+  }
+  document.getElementById('picker-confirm').disabled = s.selCount === 0;
+}
+
+async function confirmPicker() {
+  const selected = pickerFiles.filter(f => !isPathExcluded(f.path));
+  const ch = pickerCh;
+  closePicker();
+  if (selected.length) await uploadFiles(ch, selected);
 }
 
 // --- Upload with diff ---
