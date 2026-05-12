@@ -68,6 +68,21 @@ main{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)
 .tree-children{margin-left:16px;border-left:1px solid var(--border);padding-left:4px}
 .tree-more{color:var(--dim);font-style:italic;padding:2px 4px;font-size:11px;cursor:pointer}
 .tree-more:hover{color:var(--accent)}
+.upload-progress{margin:6px 0;font-size:12px;display:none}
+.upload-progress.active{display:block}
+.upload-progress progress{width:100%;height:6px}
+.upload-progress .label{display:flex;justify-content:space-between;color:var(--dim);margin:4px 0;font-size:11px}
+.upload-progress .upload-files{max-height:200px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px;font-family:'SF Mono','Fira Code','Cascadia Code',monospace;font-size:12px;line-height:1.6}
+.upload-progress .uf-row{display:flex;align-items:center;gap:8px;padding:1px 4px;border-radius:3px;white-space:nowrap}
+.upload-progress .uf-row:hover{background:rgba(88,166,255,.06)}
+.upload-progress .uf-row .p{flex:1;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.upload-progress .uf-row .s{flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:3px;border:1px solid var(--border)}
+.upload-progress .uf-row .s.pending{color:var(--dim)}
+.upload-progress .uf-row .s.uploading{color:var(--accent);border-color:var(--accent)}
+.upload-progress .uf-row .s.done{color:var(--success);border-color:var(--success)}
+.upload-progress .uf-row .s.failed{color:var(--danger);border-color:var(--danger)}
+.upload-progress .uf-row .s.retrying{color:#d29922;border-color:#d29922}
+.upload-progress .upload-actions{margin-top:6px;display:flex;gap:8px;justify-content:flex-end}
 @media(max-width:768px){main{grid-template-columns:1fr}}
 </style>
 </head>
@@ -98,6 +113,12 @@ main{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)
         Drop folder here or <label>browse<input type="file" id="input-a" webkitdirectory multiple /></label>
       </div>
       <div class="status-bar" id="status-a"></div>
+      <div class="upload-progress" id="upload-progress-a">
+        <progress id="upload-bar-a" value="0" max="1"></progress>
+        <div class="label"><span id="upload-counts-a">0 / 0</span><span id="upload-pct-a">0%</span></div>
+        <div class="upload-files" id="upload-files-a"></div>
+        <div class="upload-actions"><button onclick="cancelUpload('a')" class="danger" id="upload-cancel-a">Cancel</button></div>
+      </div>
       <div class="file-list" id="files-a"><em>empty</em></div>
       <div class="actions">
         <button onclick="downloadAll('a')">Download ZIP</button>
@@ -119,6 +140,12 @@ main{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)
         Drop folder here or <label>browse<input type="file" id="input-b" webkitdirectory multiple /></label>
       </div>
       <div class="status-bar" id="status-b"></div>
+      <div class="upload-progress" id="upload-progress-b">
+        <progress id="upload-bar-b" value="0" max="1"></progress>
+        <div class="label"><span id="upload-counts-b">0 / 0</span><span id="upload-pct-b">0%</span></div>
+        <div class="upload-files" id="upload-files-b"></div>
+        <div class="upload-actions"><button onclick="cancelUpload('b')" class="danger" id="upload-cancel-b">Cancel</button></div>
+      </div>
       <div class="file-list" id="files-b"><em>empty</em></div>
       <div class="actions">
         <button onclick="downloadAll('b')">Download ZIP</button>
@@ -203,6 +230,13 @@ let ignorePatterns = JSON.parse(localStorage.getItem('sync_ignore') || 'null') |
 let syncAll = localStorage.getItem('sync_all') === 'true';
 let eventSources = {};
 
+// --- Upload tuning constants (D-01, D-03, D-16) ---
+const UPLOAD_CONCURRENCY = 4;
+const RETRY_DELAYS = [1000, 3000, 10000];
+let uploadController = null;   // AbortController for the active upload, or null
+let uploadProgress = null;     // { ch, total, done, failed, files: Map }
+let uploadRenderScheduled = false;
+
 // --- Auth ---
 
 function connect() {
@@ -262,8 +296,27 @@ async function api(method, path, body, extraHeaders) {
       opts.body = body;
     }
   }
+  if (headers.__signal) {
+    opts.signal = headers.__signal;
+    delete headers.__signal;
+  }
   const resp = await fetch(path, opts);
-  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  if (!resp.ok) {
+    const ct = resp.headers.get('Content-Type') || '';
+    if (ct.startsWith('application/json')) {
+      let payload;
+      try { payload = await resp.json(); } catch (_) { payload = {}; }
+      const e = new Error(payload.error || ('HTTP ' + resp.status));
+      e.status = resp.status;
+      e.code = payload.code;
+      throw e;
+    }
+    let txt = '';
+    try { txt = await resp.text(); } catch (_) { /* ignore */ }
+    const e = new Error('HTTP ' + resp.status + (txt ? ': ' + txt.slice(0, 200) : ''));
+    e.status = resp.status;
+    throw e;
+  }
   return resp;
 }
 
@@ -631,13 +684,21 @@ async function confirmPicker() {
 async function uploadFiles(ch, files) {
   const status = document.getElementById('status-' + ch);
   status.style.color = '';
+
+  // Cancel any in-flight upload on the same channel
+  if (uploadController) {
+    try { uploadController.abort(); } catch (_) {}
+  }
+  uploadController = new AbortController();
+
   try {
     // Hash
     status.textContent = 'Hashing ' + files.length + ' files...';
     const manifest = {};
     let hashErrors = 0;
-    let skippedFiles = [];
+    const skippedFiles = [];
     for (let i = 0; i < files.length; i++) {
+      if (uploadController.signal.aborted) throw new Error('cancelled');
       try {
         manifest[files[i].path] = await sha256(await files[i].file.arrayBuffer());
       } catch (e) {
@@ -652,7 +713,6 @@ async function uploadFiles(ch, files) {
     }
     if (hashErrors > 0) {
       console.warn('Skipped files due to I/O errors:', skippedFiles);
-      status.textContent = hashErrors + ' files skipped (I/O error), uploading ' + manifest.length + '...';
     }
 
     // Diff
@@ -664,50 +724,215 @@ async function uploadFiles(ch, files) {
     if (toUpload.length === 0) {
       status.textContent = 'No changes. ' + same + ' files identical.';
       status.style.color = 'var(--success)';
+      uploadController = null;
       return;
     }
 
-    // Upload in batches (stay under Cloudflare's 100MB limit)
-    const BATCH_MAX = 15 * 1024 * 1024; // 15MB per request (multipart overhead)
-    let uploaded = 0;
-    let batchNum = 0;
-    let fd = new FormData();
-    let batchSize = 0;
-
+    // Build upload set as [{path, file}]
+    const uploadSet = [];
     for (const p of toUpload) {
       const entry = files.find(f => f.path === p);
-      if (!entry) continue;
-      try {
-        fd.append(p, entry.file);
-        batchSize += entry.file.size;
-      } catch (e) {
-        console.warn('Append error for', p, e);
-        continue;
-      }
-
-      if (batchSize >= BATCH_MAX) {
-        batchNum++;
-        status.textContent = 'Uploading batch ' + batchNum + '... (' + uploaded + '/' + toUpload.length + ')';
-        const r = await api('POST', '/api/' + ch + '/upload', fd).then(r => r.json());
-        uploaded += r.uploaded || 0;
-        fd = new FormData();
-        batchSize = 0;
-      }
-    }
-    // Final batch
-    if (batchSize > 0) {
-      batchNum++;
-      status.textContent = 'Uploading batch ' + batchNum + '... (' + uploaded + '/' + toUpload.length + ')';
-      const r = await api('POST', '/api/' + ch + '/upload', fd).then(r => r.json());
-      uploaded += r.uploaded || 0;
+      if (entry) uploadSet.push(entry);
     }
 
-    status.textContent = uploaded + ' uploaded, ' + same + ' unchanged';
-    status.style.color = 'var(--success)';
+    // Init progress
+    uploadProgress = {
+      ch,
+      total: uploadSet.length,
+      done: 0,
+      failed: 0,
+      files: new Map(uploadSet.map(e => [e.path, { state: 'pending', attempt: 0, error: '' }])),
+    };
+    showUploadProgress(ch);
+    renderUploadProgress();
+
+    // Run the queue (per-file POSTs, UPLOAD_CONCURRENCY workers — D-01)
+    status.textContent = 'Uploading ' + uploadSet.length + ' files...';
+    await runUploadQueue(ch, uploadSet, uploadController.signal);
+
+    // Summary
+    const okCount = uploadProgress.done;
+    const failCount = uploadProgress.failed;
+    if (failCount === 0) {
+      status.textContent = okCount + ' uploaded, ' + same + ' unchanged';
+      status.style.color = 'var(--success)';
+      hideUploadProgress(ch);
+    } else {
+      status.textContent = okCount + ' uploaded, ' + failCount + ' failed, ' + same + ' unchanged';
+      status.style.color = 'var(--danger)';
+      // Keep progress UI visible so the user can see which files failed.
+    }
     refreshFiles(ch);
   } catch (err) {
-    status.textContent = 'Error: ' + err.message;
-    status.style.color = 'var(--danger)';
+    if (err.message === 'cancelled' || uploadController?.signal.aborted) {
+      status.textContent = 'Upload cancelled.';
+      status.style.color = 'var(--danger)';
+    } else {
+      status.textContent = 'Error: ' + err.message;
+      status.style.color = 'var(--danger)';
+    }
+  } finally {
+    uploadController = null;
+  }
+}
+
+// --- Upload queue + retry (Plan 02, D-01..D-04, D-08..D-09) ---
+
+async function runUploadQueue(ch, uploadSet, signal) {
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      if (signal.aborted) return;
+      const idx = cursor++;
+      if (idx >= uploadSet.length) return;
+      const entry = uploadSet[idx];
+      try {
+        await uploadOneFile(ch, entry, signal);
+        const st = uploadProgress.files.get(entry.path);
+        st.state = 'done';
+        uploadProgress.done++;
+      } catch (err) {
+        const st = uploadProgress.files.get(entry.path);
+        st.state = 'failed';
+        st.error = err.message || String(err);
+        uploadProgress.failed++;
+      }
+      scheduleProgressRender();
+    }
+  }
+  const workers = [];
+  for (let i = 0; i < UPLOAD_CONCURRENCY; i++) workers.push(worker());
+  await Promise.all(workers);
+  // Force a final flush
+  renderUploadProgress();
+}
+
+async function uploadOneFile(ch, entry, signal) {
+  const path = entry.path;
+  const st = uploadProgress.files.get(path);
+  for (let attempt = 1; attempt <= RETRY_DELAYS.length + 1; attempt++) {
+    if (signal.aborted) throw new Error('cancelled');
+    st.attempt = attempt;
+    st.state = attempt === 1 ? 'uploading' : 'retrying';
+    scheduleProgressRender();
+
+    const fd = new FormData();
+    fd.append(path, entry.file);
+    let r;
+    try {
+      const resp = await api('POST', '/api/' + ch + '/upload', fd, { __signal: signal });
+      r = await resp.json();
+    } catch (err) {
+      if (signal.aborted || err.name === 'AbortError') throw new Error('cancelled');
+      // Retry decision
+      if (shouldRetry(err) && attempt <= RETRY_DELAYS.length) {
+        st.error = err.message;
+        await abortableSleep(RETRY_DELAYS[attempt - 1], signal);
+        continue;
+      }
+      throw err;
+    }
+    // 200 OK + uploaded:1 → success
+    if ((r.uploaded || 0) >= 1) {
+      return;
+    }
+    // 200 OK but server reports in-band failure
+    const firstErr = (r.errors && r.errors[0]) || {};
+    const inBandRetriable = firstErr.code === 'TIMEOUT' || firstErr.code === 'INTERNAL';
+    if (inBandRetriable && attempt <= RETRY_DELAYS.length) {
+      st.error = firstErr.message || firstErr.code || 'server failure';
+      await abortableSleep(RETRY_DELAYS[attempt - 1], signal);
+      continue;
+    }
+    // Non-retriable in-band failure → throw
+    const e = new Error(firstErr.message || firstErr.code || 'upload failed');
+    e.code = firstErr.code;
+    throw e;
+  }
+  throw new Error('retries exhausted');
+}
+
+function shouldRetry(err) {
+  // No .status => network error (fetch threw). Retry.
+  if (err.status === undefined) return true;
+  if (err.status >= 500) return true;
+  if (err.status === 408) return true;
+  // 4xx other than 408: no retry (D-03).
+  return false;
+}
+
+function abortableSleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new Error('cancelled'));
+    const t = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(t);
+      signal.removeEventListener('abort', onAbort);
+      reject(new Error('cancelled'));
+    }
+    signal.addEventListener('abort', onAbort);
+  });
+}
+
+function scheduleProgressRender() {
+  if (uploadRenderScheduled) return;
+  uploadRenderScheduled = true;
+  // ~200ms throttle for the file list; rAF for the bar (D-09).
+  setTimeout(() => {
+    uploadRenderScheduled = false;
+    renderUploadProgress();
+  }, 200);
+  requestAnimationFrame(() => updateProgressBar());
+}
+
+function updateProgressBar() {
+  if (!uploadProgress) return;
+  const ch = uploadProgress.ch;
+  const bar = document.getElementById('upload-bar-' + ch);
+  if (!bar) return;
+  bar.max = uploadProgress.total;
+  bar.value = uploadProgress.done + uploadProgress.failed;
+}
+
+function renderUploadProgress() {
+  if (!uploadProgress) return;
+  const ch = uploadProgress.ch;
+  updateProgressBar();
+  const counts = document.getElementById('upload-counts-' + ch);
+  const pct = document.getElementById('upload-pct-' + ch);
+  const list = document.getElementById('upload-files-' + ch);
+  if (!counts || !list) return;
+  const done = uploadProgress.done;
+  const failed = uploadProgress.failed;
+  const total = uploadProgress.total;
+  counts.textContent = (done + failed) + ' / ' + total + ' files' + (failed ? ' (' + failed + ' failed)' : '');
+  pct.textContent = total ? Math.floor(((done + failed) / total) * 100) + '%' : '0%';
+  const rows = [];
+  for (const [path, st] of uploadProgress.files) {
+    const label = st.state === 'retrying'
+      ? 'retrying ' + st.attempt + '/' + (RETRY_DELAYS.length + 1)
+      : st.state;
+    rows.push('<div class="uf-row"><span class="p">' + esc(path) + '</span><span class="s ' + st.state + '">' + esc(label) + '</span></div>');
+  }
+  list.innerHTML = rows.join('');
+}
+
+function showUploadProgress(ch) {
+  const el = document.getElementById('upload-progress-' + ch);
+  if (el) el.classList.add('active');
+}
+
+function hideUploadProgress(ch) {
+  const el = document.getElementById('upload-progress-' + ch);
+  if (el) el.classList.remove('active');
+}
+
+function cancelUpload(ch) {
+  if (uploadController && uploadProgress && uploadProgress.ch === ch) {
+    uploadController.abort();
   }
 }
 
