@@ -16,24 +16,28 @@ user_setup: []
 
 must_haves:
   truths:
-    - "Browser uploads a folder with 500+ files without WebKitBlobResource error 4 or connection drops"
-    - "At most UPLOAD_CONCURRENCY=4 fetch POST requests to /api/{ch}/upload are in flight at any moment"
-    - "On HTTP 5xx, HTTP 408, or network error, a failed file is retried with delays 1s/3s/10s for up to 3 attempts before being marked failed"
-    - "On HTTP 4xx other than 408, the file is marked failed immediately without retry"
-    - "User sees per-file rows with states pending/uploading/done/failed/retrying AND an overall progress bar showing files-done / files-total"
-    - "Cancelling the upload aborts in-flight requests and prevents queued retries from firing"
+    - "D-01: Browser uploads a folder with 500+ files without WebKitBlobResource error 4 or connection drops"
+    - "D-01: At most UPLOAD_CONCURRENCY=4 fetch POST requests to /api/{ch}/upload are in flight at any moment"
+    - "D-02: The old BATCH_MAX 15 MB size-batching loop is fully removed from uploadFiles"
+    - "D-03: On HTTP 5xx, HTTP 408, or network error, a failed file is retried with delays 1s/3s/10s for up to 3 attempts before being marked failed"
+    - "D-03: On HTTP 4xx other than 408, the file is marked failed immediately without retry"
+    - "D-04: Cancelling the upload aborts in-flight requests and prevents queued retries from firing"
+    - "D-08: User sees per-file rows with states pending/uploading/done/failed/retrying AND an overall progress bar showing files-done / files-total"
+    - "D-09: Progress DOM updates are throttled to ~200 ms with a requestAnimationFrame-backed bar update"
+    - "D-11: api() helper parses structured JSON error bodies (Content-Type sniff) with text fallback, exposing .status and .code on the thrown Error"
+    - "D-16: UPLOAD_CONCURRENCY = 4 constant lives near the top of the UI script block"
   artifacts:
     - path: "static/index.html"
-      provides: "Per-file upload queue with concurrency control"
+      provides: "Per-file upload queue with concurrency control (D-01)"
       contains: "UPLOAD_CONCURRENCY"
     - path: "static/index.html"
-      provides: "Per-file retry with exponential backoff"
+      provides: "Per-file retry with exponential backoff (D-03)"
       contains: "uploadOneFile"
     - path: "static/index.html"
-      provides: "Per-file + overall progress UI"
+      provides: "Per-file + overall progress UI styled consistently with the picker (D-08)"
       contains: "renderUploadProgress"
     - path: "static/index.html"
-      provides: "JSON-or-text error parsing in api() helper"
+      provides: "JSON-or-text error parsing in api() helper (D-11)"
       contains: "application/json"
   key_links:
     - from: "static/index.html:uploadFiles"
@@ -51,11 +55,11 @@ must_haves:
 ---
 
 <objective>
-Rewrite `uploadFiles` in `static/index.html` to replace the current 15 MB batch-by-size loop with a per-file queue + worker pool (concurrency = 4), add per-file retry with exponential backoff (1s / 3s / 10s, max 3 attempts, retry on network/5xx/408, NO retry on other 4xx), upgrade `api()` to parse structured JSON errors with text fallback (D-11), and add a two-tier progress UI (per-file rows + overall bar). Delivers UPLOAD-01, UPLOAD-02, UPLOAD-03, UPLOAD-04. Out of scope: resume from localStorage (Plan 03), visual polish (Phase 4).
+Rewrite `uploadFiles` in `static/index.html` (currently lines 631-712) to replace the existing 15 MB batch-by-size loop (`BATCH_MAX = 15 * 1024 * 1024`) with a per-file queue + worker pool (concurrency = 4), add per-file retry with exponential backoff (1s / 3s / 10s, max 3 attempts, retry on network/5xx/408, NO retry on other 4xx), upgrade `api()` (line 251) to parse structured JSON errors with text fallback (D-11), and add a two-tier progress UI (per-file rows + overall bar) whose styling matches the existing `.tree-row` vocabulary used by the picker modal. Delivers UPLOAD-01, UPLOAD-02, UPLOAD-03, UPLOAD-04. Out of scope: resume from localStorage (Plan 03), visual polish (Phase 4), changes to the picker itself.
 
-Purpose: Today the upload dispatches 100+ files through one or two FormData batches and the WebKit connection pool collapses. A small worker pool with retry + AbortController + a progress UI directly solves the WebKitBlobResource error and gives the user something to look at while 500 files upload.
+Purpose: The WIP commit already shipped the picker flow (drop → `openPicker(ch, files)` → `confirmPicker()` → `uploadFiles(ch, selected)`) and the picker UI uses a rich tree styling vocabulary (`.tree`, `.tree-row`, `.tree-children`, `.caret`, `.meta`, etc.) defined around lines 53-69. But `uploadFiles` itself (line 631) still dispatches the selected file set through a `BATCH_MAX = 15 MB` FormData accumulator with one or two giant multipart POSTs. With 500+ files this collapses the WebKit connection pool (`WebKitBlobResource error 4`). Replacing that loop with a small worker pool + per-file POSTs + retry + AbortController + a progress UI that uses the SAME monospace/colour-token vocabulary as the picker tree directly solves the reliability bug and gives the user something to look at while 500 files upload — and feels native rather than bolted on.
 
-Output: Modified `static/index.html` — single file. New `UPLOAD_CONCURRENCY` constant, new `uploadOneFile`, new `runUploadQueue`, new `renderUploadProgress`, modified `uploadFiles`, modified `api()`. No new files, no new HTTP endpoints.
+Output: Modified `static/index.html` — single file. New `UPLOAD_CONCURRENCY` + `RETRY_DELAYS` constants, new `uploadOneFile`, new `runUploadQueue`, new `renderUploadProgress` (+ small helpers `shouldRetry`, `abortableSleep`, `scheduleProgressRender`, `updateProgressBar`, `showUploadProgress`, `hideUploadProgress`, `cancelUpload`), rewritten `uploadFiles` body, rewritten `api()` body, new CSS rules that share the picker's color tokens (`var(--accent)`, `var(--danger)`, `var(--dim)`, `var(--success)`, `#d29922`) and monospace font stack. No new HTML files, no new HTTP endpoints, no changes to the picker (`openPicker`, `confirmPicker`, `renderRow`, etc.).
 </objective>
 
 <execution_context>
@@ -74,64 +78,82 @@ Output: Modified `static/index.html` — single file. New `UPLOAD_CONCURRENCY` c
 @static/index.html
 
 <interfaces>
-Existing public entry point (line 622) — preserve signature:
-```js
-async function confirmPicker()        // calls uploadFiles(ch, selected)
-async function uploadFiles(ch, files) // files = [{file: File, path: "relative/path"}]
-```
+<!-- Key contracts extracted from the CURRENT static/index.html (post-WIP). -->
 
-Existing helpers — reuse:
+Existing flow — PRESERVE unchanged:
+```
+drop event (line 235-240)  ─┐
+input change  (line 241-245) ┴─> openPicker(ch, files)  (line 379)
+                                  → picker modal (HTML at line 152-169, CSS at 53-69)
+                                  → confirmPicker()  (line 622)
+                                  → await uploadFiles(ch, selected)  (line 626)
+```
+`uploadFiles(ch, files)` signature stays the same; only its internals change.
+
+Existing helpers — reuse, do not duplicate:
 ```js
-async function api(method, path, body, extraHeaders)  // line 251 — needs JSON-error upgrade
+async function api(method, path, body, extraHeaders)  // line 251 — rewrite body for JSON-error parsing
 async function sha256(buffer)                          // line 304
 function refreshFiles(ch)                              // line 716
 function esc(s)                                        // line 731
+function fmtBytes(n)                                   // line 468
 ```
+
+Existing styling vocabulary the new progress UI MUST share (from style block lines 7-72):
+- Color tokens: `var(--bg) #0d1117`, `var(--surface) #161b22`, `var(--border) #30363d`, `var(--text) #c9d1d9`, `var(--dim) #8b949e`, `var(--accent) #58a6ff`, `var(--danger) #f85149`, `var(--success) #3fb950`, plus the warning yellow `#d29922` used at line 66 for `.meta.big`.
+- Monospace stack: `'SF Mono','Fira Code','Cascadia Code',monospace` (used in `.tree` line 57 and `.text-section textarea` line 43).
+- Picker tree rows: `.tree-row` (line 58) is the visual reference — flex row, `padding:1px 4px`, `border-radius:3px`, hover tint via `rgba(88,166,255,.06)` (line 59). The new per-file upload rows should feel like a sibling: same monospace, same row padding/radius, same hover treatment, same meta-column color discipline (dim for neutral, accent for active, success/danger/warning for terminal/transient states).
 
 Server contract from Plan 01 (Wave 1 sibling — code against this contract, do not wait):
 - Each `POST /api/{ch}/upload` is now ONE file as multipart with form-field name = the relative path (server's `safePath` already accepts the form-field name as the destination path; see main.go line 253 `part.FormName()`).
-- Successful response: `{"uploaded": 1, "failed": 0, "errors": []}` (extended shape, additive over old `{"uploaded": N}`).
+- Successful response: `{"uploaded": 1, "failed": 0, "errors": []}` (extended shape, additive over the WIP's `{"uploaded": N}`).
 - Error response on size cap: HTTP 413, `Content-Type: application/json`, body `{"error": "...", "code": "SIZE_LIMIT"}`.
-- Error response on per-file timeout: HTTP 200 with `{"uploaded": 0, "failed": 1, "errors": [{"file": "...", "code": "TIMEOUT", ...}]}`. Client treats `r.uploaded === 0 && r.failed >= 1` after a 200 response as a retriable failure if any of the errors has `code in {TIMEOUT, INTERNAL}`.
+- Error response on per-file timeout / internal: HTTP 200 with `{"uploaded": 0, "failed": 1, "errors": [{"file": "...", "code": "TIMEOUT", ...}]}`. Client treats `r.uploaded === 0 && r.failed >= 1` after a 200 response as a retriable in-band failure if any of the errors has `code in {TIMEOUT, INTERNAL}`.
+- Error response on bad request: HTTP 400, JSON, `code: "BAD_REQUEST"` — NOT retriable.
 
-Module-level state added by this plan:
+Module-level state added by this plan (D-01, D-03, D-16):
 ```js
-const UPLOAD_CONCURRENCY = 4;             // D-01, D-16
-const RETRY_DELAYS = [1000, 3000, 10000]; // D-03
-let uploadController = null;              // current AbortController, or null when idle
-let uploadProgress = null;                // { ch, total, done, failed, files: Map<path, {state, attempt, error}> }
+const UPLOAD_CONCURRENCY = 4;
+const RETRY_DELAYS = [1000, 3000, 10000];
+let uploadController = null;   // current AbortController, or null when idle
+let uploadProgress = null;     // { ch, total, done, failed, files: Map<path, {state, attempt, error}> }
+let uploadRenderScheduled = false;
 ```
 
 Per-file state values (D-08): `'pending' | 'uploading' | 'done' | 'failed' | 'retrying'`.
+
+Progress UI placement decision (within Claude's Discretion per CONTEXT.md):
+The progress container is a NEW per-channel `<div class="upload-progress" id="upload-progress-{ch}">` inserted immediately AFTER the existing `<div class="status-bar" id="status-{ch}"></div>` (line 100 for channel a, line 121 for channel b). This keeps progress inline with the channel column where the user currently looks for status, and stays out of the picker modal — the picker is for pre-upload selection; once `confirmPicker` fires the modal closes and the user's attention moves to the inline progress.
 </interfaces>
 </context>
 
 <tasks>
 
 <task type="auto" tdd="false">
-  <name>Task 1: Upgrade api() to parse JSON errors, add upload progress DOM, and replace uploadFiles internals with per-file queue + retry</name>
+  <name>Task 1: Upgrade api() to parse JSON errors, add upload progress DOM + CSS, and replace uploadFiles internals with per-file queue + retry</name>
   <files>static/index.html</files>
   <read_first>
-    - static/index.html (entire file — single 810-line file)
+    - static/index.html (entire file — single 810-line file, post-WIP)
     - .planning/phases/01-upload-reliability/01-CONTEXT.md §Decisions D-01..D-11, D-16
     - .planning/codebase/CONCERNS.md §"Browser Upload Bug: WebKitBlobResource Error 4 on Large Folder Uploads"
   </read_first>
   <behavior>
     - `api()` returns a structured Error on `!resp.ok`: parses JSON body when `Content-Type: application/json`, else falls back to text. Error carries `.status` (HTTP code) and `.code` (machine code string, possibly undefined). Network errors thrown by fetch bubble unchanged (no `.status` property — that's the signal for "retry").
-    - `api()` accepts an optional `AbortSignal` via `extraHeaders.__signal`; the signal is moved to `opts.signal` and the `__signal` key is removed before fetch.
-    - `uploadFiles(ch, files)` keeps the hash + diff phase (existing behavior), then dispatches the upload set through `runUploadQueue` with concurrency 4.
-    - `runUploadQueue` spawns exactly `UPLOAD_CONCURRENCY` workers that pull from a shared pending list (closure index counter, not Promise.all on the full set). Workers exit when the queue is drained OR the AbortController is aborted.
-    - `uploadOneFile(ch, entry, signal)` POSTs ONE file per request as multipart, form-field name = `entry.path`, body = `entry.file`. Returns `{ok: true}` on 200 with `uploaded === 1`, else throws.
-    - Retry loop inside `uploadOneFile`: up to 3 attempts. Retry triggers on (a) thrown Error with no `.status` (network error), (b) `.status >= 500`, (c) `.status === 408`, (d) HTTP 200 but `r.uploaded === 0 && (r.errors[0]?.code === 'TIMEOUT' || r.errors[0]?.code === 'INTERNAL')`. NO retry on other 4xx — those mark the file failed immediately.
-    - Between attempts: `await sleep(RETRY_DELAYS[attempt-1])` where attempt index 1 -> 1000ms, 2 -> 3000ms, 3 -> 10000ms (D-03). The sleep MUST abort if `signal.aborted` becomes true.
-    - Progress UI: `renderUploadProgress()` writes into a new container `<div id="upload-progress-{ch}">` inserted after the existing `<div class="status-bar" id="status-{ch}">`. Container holds: an overall `<progress>` bar (max=total, value=done+failed), a percentage label "X / Y files (Z failed)", and a scrollable `<div class="upload-files">` with one row per file showing path + state badge. Updates throttled to ~200ms via a `requestAnimationFrame`-backed scheduler so DOM stays responsive with 500 rows (D-09).
-    - On full completion (queue drained, all workers exited): refresh the file list via `refreshFiles(ch)`, set the status bar to a success/partial-success summary, and clear `uploadController`.
-    - On abort: leave per-file rows in their last state ('uploading' rows become 'failed' with `error = 'cancelled'`). No further DOM updates after abort. Plan 03 will wire the Resume button against this state.
+    - `api()` accepts an optional `AbortSignal` via `extraHeaders.__signal`; the signal is moved to `opts.signal` and the `__signal` key is removed before fetch (so it is never sent on the wire).
+    - `uploadFiles(ch, files)` keeps the hash + diff phase (existing behavior at lines 636-668), then dispatches the upload set through `runUploadQueue` with concurrency 4 INSTEAD OF the BATCH_MAX loop (lines 670-703 in the current file — these lines are fully removed).
+    - `runUploadQueue` spawns exactly `UPLOAD_CONCURRENCY` workers that pull from a shared pending list via a closure index counter (NOT `Promise.all` on the full set). Workers exit when the queue is drained OR the AbortController is aborted.
+    - `uploadOneFile(ch, entry, signal)` POSTs ONE file per request as multipart, form-field name = `entry.path`, body = `entry.file`. Returns on 200 with `uploaded === 1`, else throws.
+    - Retry loop inside `uploadOneFile`: up to 3 retry attempts (4 total tries). Retry triggers on (a) thrown Error with no `.status` (network error), (b) `.status >= 500`, (c) `.status === 408`, (d) HTTP 200 but `r.uploaded === 0 && (r.errors[0]?.code === 'TIMEOUT' || r.errors[0]?.code === 'INTERNAL')`. NO retry on other 4xx — those mark the file failed immediately.
+    - Between attempts: `await abortableSleep(RETRY_DELAYS[attempt-1], signal)` where attempt index 1 → 1000ms, 2 → 3000ms, 3 → 10000ms (D-03). The sleep MUST abort if `signal.aborted` becomes true.
+    - Progress UI styling: a new CSS block uses the SAME color tokens and monospace stack as `.tree-row` (D-08 explicitly cites tree-style reuse). Per-file rows visually mirror `.tree-row` — same row padding (`1px 0`/`1px 4px`), same monospace font family, same color discipline. State badges use `var(--accent)` for uploading, `var(--success)` for done, `var(--danger)` for failed, `#d29922` for retrying (matching the picker's `.meta.big` warning color at line 66), `var(--dim)` for pending. This keeps the new rows feeling native to the picker vocabulary.
+    - Progress UI placement: a new `<div class="upload-progress" id="upload-progress-{ch}">` container inserted immediately after each `<div class="status-bar" id="status-{ch}"></div>`. Container holds: an overall `<progress>` bar (max=total, value=done+failed), a counts/percentage label, a scrollable `<div class="upload-files">` with `.uf-row` rows for each file, and a Cancel button. Updates throttled to ~200 ms via `setTimeout` for the file list, plus `requestAnimationFrame` for the overall bar (D-09).
+    - On full completion (queue drained, all workers exited): refresh the file list via `refreshFiles(ch)`. If `failed === 0`, hide the progress container (success path); otherwise leave it visible so the user can see which files failed. Clear `uploadController`.
+    - On abort: leave per-file rows in their last state; in-flight rows transition to 'failed' with `error = 'cancelled'`. No further DOM updates after abort. Plan 03 will wire the Resume button against this state.
   </behavior>
   <action>
-    This task makes 6 surgical edits to `static/index.html`. Apply them in order. Use Edit tool (not Write) since the file is large.
+    This task makes 6 surgical edits to `static/index.html`. Apply them in order. Use the Edit tool (not Write) since the file is large.
 
-    **Edit A — Add constants and module state (insert after line 204, after the existing `let eventSources = {};` line):**
+    **Edit A — Add constants and module state. Insert after line 204 (just after `let eventSources = {};` and before the `// --- Auth ---` comment at line 206):**
 
     ```js
     // --- Upload tuning constants (D-01, D-03, D-16) ---
@@ -142,39 +164,42 @@ Per-file state values (D-08): `'pending' | 'uploading' | 'done' | 'failed' | 're
     let uploadRenderScheduled = false;
     ```
 
-    **Edit B — Add `<style>` rules. Append these rules to the existing inline `<style>` block (before the closing `</style>` at line 72-ish — find via `</style>`):**
+    **Edit B — Add CSS rules consistent with the picker's `.tree-row` vocabulary. Append these rules to the existing `<style>` block, immediately BEFORE the `@media(max-width:768px)` rule at line 71. Use the same color tokens, monospace font, and row geometry that `.tree-row` already uses:**
 
     ```css
-    .upload-progress{margin:6px 0;font-size:11px;display:none}
+    .upload-progress{margin:6px 0;font-size:12px;display:none}
     .upload-progress.active{display:block}
     .upload-progress progress{width:100%;height:6px}
-    .upload-progress .label{display:flex;justify-content:space-between;color:var(--dim);margin:4px 0}
-    .upload-progress .upload-files{max-height:180px;overflow-y:auto;background:var(--surface);border-radius:6px;padding:6px 8px;font-family:'SF Mono','Fira Code',monospace}
-    .upload-progress .uf-row{display:flex;justify-content:space-between;gap:8px;padding:1px 0;white-space:nowrap}
-    .upload-progress .uf-row .p{overflow:hidden;text-overflow:ellipsis;flex:1;color:var(--dim)}
+    .upload-progress .label{display:flex;justify-content:space-between;color:var(--dim);margin:4px 0;font-size:11px}
+    .upload-progress .upload-files{max-height:200px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px;font-family:'SF Mono','Fira Code','Cascadia Code',monospace;font-size:12px;line-height:1.6}
+    .upload-progress .uf-row{display:flex;align-items:center;gap:8px;padding:1px 4px;border-radius:3px;white-space:nowrap}
+    .upload-progress .uf-row:hover{background:rgba(88,166,255,.06)}
+    .upload-progress .uf-row .p{flex:1;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
     .upload-progress .uf-row .s{flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:3px;border:1px solid var(--border)}
     .upload-progress .uf-row .s.pending{color:var(--dim)}
     .upload-progress .uf-row .s.uploading{color:var(--accent);border-color:var(--accent)}
     .upload-progress .uf-row .s.done{color:var(--success);border-color:var(--success)}
     .upload-progress .uf-row .s.failed{color:var(--danger);border-color:var(--danger)}
     .upload-progress .uf-row .s.retrying{color:#d29922;border-color:#d29922}
-    .upload-progress .upload-actions{margin-top:6px;display:flex;gap:8px}
+    .upload-progress .upload-actions{margin-top:6px;display:flex;gap:8px;justify-content:flex-end}
     ```
 
-    **Edit C — Add the progress container DOM. For each channel (a and b), insert a new div directly after the existing `<div class="status-bar" id="status-{ch}"></div>`. Concretely, edit the two lines that match the pattern `<div class="status-bar" id="status-a"></div>` and `<div class="status-bar" id="status-b"></div>` and append immediately after each:**
+    Note: This CSS deliberately mirrors `.tree-row` (line 58) — same `display:flex;align-items:center;gap:?;padding:1px 4px;border-radius:3px;white-space:nowrap`, same monospace stack, same hover tint `rgba(88,166,255,.06)`, same border-token discipline. A reviewer should be able to read it as "this is the same visual family as the picker tree".
+
+    **Edit C — Add the progress container DOM. For channel A, find the line `<div class="status-bar" id="status-a"></div>` (currently line 100) and insert IMMEDIATELY AFTER it:**
 
     ```html
-    <div class="upload-progress" id="upload-progress-a">
-      <progress id="upload-bar-a" value="0" max="1"></progress>
-      <div class="label"><span id="upload-counts-a">0 / 0</span><span id="upload-pct-a">0%</span></div>
-      <div class="upload-files" id="upload-files-a"></div>
-      <div class="upload-actions"><button onclick="cancelUpload('a')" class="danger" id="upload-cancel-a">Cancel</button></div>
-    </div>
+          <div class="upload-progress" id="upload-progress-a">
+            <progress id="upload-bar-a" value="0" max="1"></progress>
+            <div class="label"><span id="upload-counts-a">0 / 0</span><span id="upload-pct-a">0%</span></div>
+            <div class="upload-files" id="upload-files-a"></div>
+            <div class="upload-actions"><button onclick="cancelUpload('a')" class="danger" id="upload-cancel-a">Cancel</button></div>
+          </div>
     ```
 
-    (and the same with `a` replaced by `b` for channel B).
+    For channel B, find `<div class="status-bar" id="status-b"></div>` (currently line 121) and insert the same block with `a` replaced by `b`.
 
-    **Edit D — Replace the body of `api()` (currently `static/index.html:251-268`). New body, verbatim:**
+    **Edit D — Replace the body of `api()` (currently `static/index.html:251-268`). New function, verbatim:**
 
     ```js
     async function api(method, path, body, extraHeaders) {
@@ -216,7 +241,7 @@ Per-file state values (D-08): `'pending' | 'uploading' | 'done' | 'failed' | 're
     }
     ```
 
-    **Edit E — Replace `uploadFiles` (currently `static/index.html:631-712`) with a hash + diff + queue dispatch + summary. New function body, verbatim:**
+    **Edit E — Replace `uploadFiles` (currently `static/index.html:631-712`). New function, verbatim:**
 
     ```js
     async function uploadFiles(ch, files) {
@@ -284,7 +309,7 @@ Per-file state values (D-08): `'pending' | 'uploading' | 'done' | 'failed' | 're
         showUploadProgress(ch);
         renderUploadProgress();
 
-        // Run the queue
+        // Run the queue (per-file POSTs, UPLOAD_CONCURRENCY workers — D-01)
         status.textContent = 'Uploading ' + uploadSet.length + ' files...';
         await runUploadQueue(ch, uploadSet, uploadController.signal);
 
@@ -315,10 +340,10 @@ Per-file state values (D-08): `'pending' | 'uploading' | 'done' | 'failed' | 're
     }
     ```
 
-    **Edit F — Add the queue runner, single-file uploader, progress renderer, and cancel helper. Insert these AFTER `uploadFiles` (i.e. after the closing brace of the function inserted by Edit E):**
+    **Edit F — Add the queue runner, single-file uploader, progress renderer, and cancel helper. Insert these IMMEDIATELY AFTER `uploadFiles` (i.e. after the closing `}` of the function inserted by Edit E, before the `// --- Channel ops ---` comment at line 714):**
 
     ```js
-    // --- Upload queue + retry (Plan 02) ---
+    // --- Upload queue + retry (Plan 02, D-01..D-04, D-08..D-09) ---
 
     async function runUploadQueue(ch, uploadSet, signal) {
       let cursor = 0;
@@ -374,11 +399,11 @@ Per-file state values (D-08): `'pending' | 'uploading' | 'done' | 'failed' | 're
           }
           throw err;
         }
-        // 200 OK but server reports retriable in-band failure?
+        // 200 OK + uploaded:1 → success
         if ((r.uploaded || 0) >= 1) {
-          st.state = 'uploading'; // transient — caller will mark 'done'
           return;
         }
+        // 200 OK but server reports in-band failure
         const firstErr = (r.errors && r.errors[0]) || {};
         const inBandRetriable = firstErr.code === 'TIMEOUT' || firstErr.code === 'INTERNAL';
         if (inBandRetriable && attempt <= RETRY_DELAYS.length) {
@@ -386,7 +411,7 @@ Per-file state values (D-08): `'pending' | 'uploading' | 'done' | 'failed' | 're
           await abortableSleep(RETRY_DELAYS[attempt - 1], signal);
           continue;
         }
-        // Non-retriable in-band failure -> throw
+        // Non-retriable in-band failure → throw
         const e = new Error(firstErr.message || firstErr.code || 'upload failed');
         e.code = firstErr.code;
         throw e;
@@ -452,7 +477,6 @@ Per-file state values (D-08): `'pending' | 'uploading' | 'done' | 'failed' | 're
       const total = uploadProgress.total;
       counts.textContent = (done + failed) + ' / ' + total + ' files' + (failed ? ' (' + failed + ' failed)' : '');
       pct.textContent = total ? Math.floor(((done + failed) / total) * 100) + '%' : '0%';
-      // Render rows
       const rows = [];
       for (const [path, st] of uploadProgress.files) {
         const label = st.state === 'retrying'
@@ -480,13 +504,13 @@ Per-file state values (D-08): `'pending' | 'uploading' | 'done' | 'failed' | 're
     }
     ```
 
-    After all edits, the file MUST still validate as parseable HTML. Run a smoke build with the embedded UI to catch issues:
+    After all edits, the file MUST still validate as parseable HTML and the Go binary must still embed it cleanly:
     ```
-    cd /Users/olli/schenanigans/sync_temple && go build -o /tmp/sync-temple ./...
+    cd /Users/olli/schenanigans/sync_temple && go build -o /tmp/sync-temple-plan02 ./...
     ```
   </action>
   <verify>
-    <automated>cd /Users/olli/schenanigans/sync_temple &amp;&amp; go build -o /tmp/sync-temple-plan02 ./... &amp;&amp; grep -c 'const UPLOAD_CONCURRENCY = 4' static/index.html &amp;&amp; grep -c 'const RETRY_DELAYS = \[1000, 3000, 10000\]' static/index.html &amp;&amp; grep -c 'function uploadOneFile' static/index.html &amp;&amp; grep -c 'function runUploadQueue' static/index.html &amp;&amp; grep -c 'function renderUploadProgress' static/index.html &amp;&amp; grep -c 'function shouldRetry' static/index.html &amp;&amp; grep -c 'AbortController' static/index.html &amp;&amp; grep -c 'upload-progress-a' static/index.html &amp;&amp; grep -c 'upload-progress-b' static/index.html</automated>
+    <automated>cd /Users/olli/schenanigans/sync_temple &amp;&amp; go build -o /tmp/sync-temple-plan02 ./... &amp;&amp; grep -c 'const UPLOAD_CONCURRENCY = 4' static/index.html &amp;&amp; grep -c 'const RETRY_DELAYS = \[1000, 3000, 10000\]' static/index.html &amp;&amp; grep -c 'function uploadOneFile' static/index.html &amp;&amp; grep -c 'function runUploadQueue' static/index.html &amp;&amp; grep -c 'function renderUploadProgress' static/index.html &amp;&amp; grep -c 'function shouldRetry' static/index.html &amp;&amp; grep -c 'new AbortController' static/index.html &amp;&amp; grep -c 'upload-progress-a' static/index.html &amp;&amp; grep -c 'upload-progress-b' static/index.html &amp;&amp; [ "$(grep -c 'BATCH_MAX' static/index.html)" = "0" ]</automated>
   </verify>
   <acceptance_criteria>
     - `grep -c 'const UPLOAD_CONCURRENCY = 4' static/index.html` returns exactly 1
@@ -498,18 +522,21 @@ Per-file state values (D-08): `'pending' | 'uploading' | 'done' | 'failed' | 're
     - `grep -c 'function abortableSleep' static/index.html` returns exactly 1
     - `grep -c 'function cancelUpload' static/index.html` returns exactly 1
     - `grep -c 'new AbortController' static/index.html` returns at least 1
-    - `grep -c 'BATCH_MAX' static/index.html` returns exactly 0 (old batch logic deleted)
+    - `grep -c 'BATCH_MAX' static/index.html` returns exactly 0 (old batch logic fully removed — both the constant and the 15 MB loop)
     - `grep -c 'id="upload-progress-a"' static/index.html` returns exactly 1
     - `grep -c 'id="upload-progress-b"' static/index.html` returns exactly 1
     - `grep -c "opts.signal = headers.__signal" static/index.html` returns exactly 1
     - `grep -c "e.code = payload.code" static/index.html` returns exactly 1
+    - `grep -c "'SF Mono','Fira Code','Cascadia Code',monospace" static/index.html` returns at least 2 (one for existing `.tree`, one for new `.upload-files`)
+    - `grep -c "rgba(88,166,255,.06)" static/index.html` returns at least 2 (one for existing `.tree-row:hover`, one for new `.uf-row:hover`)
     - `go build -o /tmp/sync-temple-plan02 ./...` exits with status 0 (embedded HTML still embeds cleanly)
     - Manual smoke (executor MUST run): start the server, open the UI in Chrome/Safari, drag a folder with at least 50 files, confirm in DevTools Network panel that no more than 4 concurrent POST /api/a/upload requests are ever in flight. (Count via DevTools "Network" filter on `upload`.)
     - Manual smoke (executor MUST run): stop the server mid-upload (kill the binary). Confirm in the UI that affected file rows transition to 'retrying' state showing `attempt N/4`, and after 3 retries the rows show 'failed'. Restart server, confirm no further activity (no new requests fire after the failure terminus).
     - Manual smoke (executor MUST run): click Cancel during an upload. Confirm in DevTools Network panel that in-flight requests show "(canceled)" and no further requests fire.
+    - Visual sanity (executor MUST eyeball): the upload progress rows look visually consistent with the picker tree rows — same monospace font, same hover tint, same color discipline for state badges. If they look "bolted on", the CSS in Edit B needs another pass.
   </acceptance_criteria>
   <done>
-    `uploadFiles` no longer batches by 15 MB; uploads one file per request through a 4-worker pool; failed files retry on transient errors with 1s/3s/10s backoff up to 3 retries; the user sees a progress container with overall bar + per-file rows and can cancel; `api()` parses JSON errors and exposes `.status` + `.code` for retry classification; server still receives requests in the existing multipart shape (form-field name = path).
+    `uploadFiles` no longer batches by 15 MB; uploads one file per request through a 4-worker pool; failed files retry on transient errors with 1s/3s/10s backoff up to 3 retries; the user sees a progress container with overall bar + per-file rows styled in the same visual family as the picker tree and can cancel; `api()` parses JSON errors and exposes `.status` + `.code` for retry classification; server still receives requests in the existing multipart shape (form-field name = path).
   </done>
 </task>
 
@@ -520,8 +547,8 @@ Per-file state values (D-08): `'pending' | 'uploading' | 'done' | 'failed' | 're
 
 | Boundary | Description |
 |----------|-------------|
-| browser fetch -> server | Same as today; auth header carries token. |
-| user input (file paths) -> DOM rendering | New per-file rows render paths via `esc()` to prevent HTML injection. |
+| browser fetch → server | Same as today; auth header carries token. |
+| user input (file paths) → DOM rendering | New per-file rows render paths via `esc()` to prevent HTML injection. |
 
 ## STRIDE Threat Register
 
@@ -539,12 +566,14 @@ Per-file state values (D-08): `'pending' | 'uploading' | 'done' | 'failed' | 're
 - DevTools Network panel: peak concurrent `POST /api/{ch}/upload` is exactly 4.
 - Server is stopped mid-upload: affected file rows enter 'retrying' state with visible attempt counter, then 'failed' after 3 retries.
 - Cancel button: aborts in-flight requests and stops further activity.
+- Visual: upload progress rows look like siblings of the picker tree rows (same monospace, same hover, same color discipline).
 - Existing CLI smoke: `python3 sync push a /tmp/somedir` (or whatever the user runs) still returns success because server response keeps `uploaded` field (Plan 01 D-17 compat).
 </verification>
 
 <success_criteria>
 - All `<acceptance_criteria>` grep counts pass and `go build` succeeds.
 - All three manual smoke tests pass (concurrency cap, retry visible, cancel works).
+- Visual sanity check passes (rows feel native, not bolted-on).
 - UPLOAD-01, UPLOAD-02, UPLOAD-03, UPLOAD-04 marked satisfied by this plan.
 </success_criteria>
 
@@ -554,6 +583,7 @@ After completion, create `.planning/phases/01-upload-reliability/01-02-SUMMARY.m
 - DevTools screenshot evidence (path or description) of peak-4 concurrency
 - Smoke test transcripts (paste DevTools timing, kill-server-mid-upload retry log, cancel observation)
 - Confirmation that `BATCH_MAX` is fully removed and no `Promise.all(uploadPromises)` pattern remains
+- Note on visual consistency with the picker tree (a one-liner like "rows share `.tree-row` font/hover/color tokens")
 </output>
 
 ## Decision Coverage
@@ -561,10 +591,10 @@ After completion, create `.planning/phases/01-upload-reliability/01-02-SUMMARY.m
 This plan addresses the following CONTEXT.md decisions (from `01-CONTEXT.md`):
 
 - D-01: Per-file upload queue with `UPLOAD_CONCURRENCY = 4` worker pool — implemented in `runUploadQueue`.
-- D-02: 15 MB size-batching (`BATCH_MAX`) removed in favor of per-file POSTs — acceptance criterion enforces `grep -c 'BATCH_MAX'` returns 0 in the rewritten upload path.
+- D-02: 15 MB size-batching (`BATCH_MAX`) removed in favor of per-file POSTs — acceptance criterion enforces `grep -c 'BATCH_MAX'` returns 0.
 - D-03: Exponential backoff retry `[1000, 3000, 10000]` ms, max 3 attempts, retry on network/5xx/408, no retry on other 4xx — implemented via `RETRY_DELAYS` constant and `shouldRetry()` predicate.
 - D-04: `AbortController` respected during retry sleeps — `abortableSleep` helper checks `signal.aborted` and removes its listener on resolution.
-- D-08: Two-tier progress UI — overall progress bar via `renderUploadProgress` plus per-file rows in expandable list with states `pending` / `uploading` / `done` / `failed` / `retrying`.
+- D-08: Two-tier progress UI — overall progress bar via `renderUploadProgress` plus per-file rows in expandable list with states `pending` / `uploading` / `done` / `failed` / `retrying`. Per-file rows reuse the picker's `.tree-row` styling vocabulary (monospace, hover tint, color tokens) so they feel native to the existing picker UI.
 - D-09: Progress DOM updates throttled to ~200 ms via `scheduleProgressRender()` with `requestAnimationFrame` for the overall bar.
 - D-11: `api()` helper upgraded to parse structured JSON errors — checks `Content-Type` and falls back to text for backward compatibility with existing endpoints.
 - D-16: Top-of-file constant `const UPLOAD_CONCURRENCY = 4` added to `static/index.html` script block.
