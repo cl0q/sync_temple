@@ -68,7 +68,7 @@ Four phases that take sync_temple from a working-but-fragile prototype to a reli
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Upload Reliability | 0/? | Not started | - |
+| 1. Upload Reliability | 2/3 | In Progress|  |
 | 2. CLI Rewrite | 0/? | Not started | - |
 | 3. CLI Release Pipeline | 0/? | Not started | - |
 | 4. Web UI Polish | 0/? | Not started | - |
