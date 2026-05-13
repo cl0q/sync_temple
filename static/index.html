@@ -236,6 +236,7 @@ const RETRY_DELAYS = [1000, 3000, 10000];
 let uploadController = null;   // AbortController for the active upload, or null
 let uploadProgress = null;     // { ch, total, done, failed, files: Map }
 let uploadRenderScheduled = false;
+let auth401Handled = false;       // guard against 401-storm: re-prompt user once, not N times
 
 // --- Auth ---
 
@@ -244,6 +245,7 @@ function connect() {
   if (!token) return;
   sessionStorage.setItem('sync_token', token);
   api('GET', '/api/a/files').then(() => {
+    auth401Handled = false;  // fresh session — re-enable the storm guard for next 401
     document.getElementById('auth').innerHTML = '<span style="color:var(--success);font-size:12px">connected</span>';
     document.getElementById('app').style.display = '';
     document.getElementById('conn-status').innerHTML = '<span style="color:var(--success)">&#9679;</span> connected';
@@ -303,6 +305,39 @@ async function api(method, path, body, extraHeaders) {
     delete headers.__signal;
   }
   const resp = await fetch(path, opts);
+  // 401 storm guard (D-Phase-1.1): clear stale token, abort in-flight, re-prompt once.
+  if (resp.status === 401 && !auth401Handled && sessionStorage.getItem('sync_token')) {
+    auth401Handled = true;
+    sessionStorage.removeItem('sync_token');
+    token = '';
+    // Cancel any in-flight upload so the remaining requests don't spam more 401s
+    if (typeof uploadController !== 'undefined' && uploadController) {
+      try { uploadController.abort(); } catch (_) {}
+    }
+    // Hide upload progress containers
+    for (const ch of ['a','b']) {
+      const el = document.getElementById('upload-progress-' + ch);
+      if (el) el.style.display = 'none';
+    }
+    // Re-prompt: show auth gate
+    const auth = document.getElementById('auth');
+    const app = document.getElementById('app');
+    if (auth) {
+      auth.innerHTML = '<span style="color:var(--danger);font-size:12px">Server rejected token — re-enter credentials</span>';
+    }
+    if (app) app.style.display = 'none';
+    const input = document.getElementById('token-input');
+    if (input) {
+      input.value = '';
+      input.focus();
+      input.scrollIntoView({behavior:'smooth', block:'center'});
+    }
+    // Throw with a clean message so the caller's catch doesn't double-handle
+    const e = new Error('401: token rejected — re-enter credentials');
+    e.status = 401;
+    e.code = 'AUTH_REJECTED';
+    throw e;
+  }
   if (!resp.ok) {
     const ct = resp.headers.get('Content-Type') || '';
     if (ct.startsWith('application/json')) {
