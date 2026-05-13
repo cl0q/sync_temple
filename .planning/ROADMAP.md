@@ -40,10 +40,10 @@ Four phases that take sync_temple from a working-but-fragile prototype to a reli
   3. CLI flag `--token` still wins over env var and file (precedence: flag > env > file > auto-generate)
   4. When the server returns 401, the browser clears `sessionStorage.sync_token` and prompts the user once — not N times in parallel
   5. The `.token` file is created with mode 0600 and lives only inside the data dir (never tracked in git)
-**Plans:** 0 plans
+**Plans:** 1/0 plans complete
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 01.1 to break down)
+- [x] TBD (run /gsd-plan-phase 01.1 to break down) (completed 2026-05-13)
 
 ### Phase 2: CLI Rewrite
 **Goal**: The Python CLI is replaced by a compiled Go binary that resolves paths correctly, validates server connectivity before touching files, and carries a version identifier
