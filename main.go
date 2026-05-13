@@ -538,10 +538,28 @@ func main() {
 	token := flag.String("token", "", "auth token (auto-generated if empty)")
 	flag.Parse()
 
+	// Token resolution: --token flag > SYNC_TEMPLE_TOKEN env > <dataDir>/.token file > generate
+	tokenFile := filepath.Join(*data, ".token")
+	tokenPersisted := false
+	if *token == "" {
+		if env := os.Getenv("SYNC_TEMPLE_TOKEN"); env != "" {
+			*token = env
+		} else if existing, err := os.ReadFile(tokenFile); err == nil {
+			*token = strings.TrimSpace(string(existing))
+		}
+	}
 	if *token == "" {
 		b := make([]byte, 16)
 		rand.Read(b)
 		*token = hex.EncodeToString(b)
+	}
+	// Persist the resolved token if no file exists (creates dataDir if needed for the write)
+	// .token file contains the auth token — not for git, keep mode 0600
+	if _, err := os.Stat(tokenFile); os.IsNotExist(err) {
+		_ = os.MkdirAll(*data, 0755)
+		if err := os.WriteFile(tokenFile, []byte(*token), 0600); err == nil {
+			tokenPersisted = true
+		}
 	}
 
 	s := newServer(*data, *token)
@@ -550,6 +568,9 @@ func main() {
 	fmt.Printf("  ───────────\n")
 	fmt.Printf("  Listen: %s\n", *addr)
 	fmt.Printf("  Token:  %s\n", *token)
+	if tokenPersisted {
+		fmt.Printf("          (persisted to %s — restarts will reuse this)\n", tokenFile)
+	}
 	fmt.Printf("  Data:   %s\n\n", *data)
 
 	mux := http.NewServeMux()
