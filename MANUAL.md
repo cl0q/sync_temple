@@ -4,6 +4,15 @@ SYNC TEMPLE
 Server: https://sync.0xxi.cloud
 Token:  <your-token-here>
 
+Token persists across server restarts:
+- Override with `--token <value>` (CLI flag wins).
+- Override with `SYNC_TEMPLE_TOKEN` environment variable (wins over the file).
+- Otherwise, the server reads `<dataDir>/.token`, or generates a new one and
+  writes it there with mode 0600.
+
+The `.token` file is created in your data directory (default `./data/.token`).
+Keep it out of any tracked path.
+
 Two channels (A and B), both bidirectional. Drop a whole folder —
 only changed files get uploaded. Live updates via SSE.
 
