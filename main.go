@@ -7,7 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	_ "embed"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -32,8 +32,8 @@ const (
 	PerFileUploadTimeout = 5 * time.Minute
 )
 
-//go:embed static/index.html
-var indexHTML []byte
+//go:embed static/**
+var staticFS embed.FS
 
 type server struct {
 	dataDir string
@@ -198,9 +198,14 @@ func writeJSONError(w http.ResponseWriter, status int, code, message string) {
 // --- Handlers ---
 
 func (s *server) serveUI(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Write(indexHTML)
+    w.Header().Set("Content-Type", "text/html; charset=utf-8")
+    w.Header().Set("Cache-Control", "no-cache")
+    data, err := staticFS.ReadFile("static/index.html")
+    if err != nil {
+        http.Error(w, "ui not found", http.StatusInternalServerError)
+        return
+    }
+    w.Write(data)
 }
 
 func (s *server) handleDiff(w http.ResponseWriter, r *http.Request) {
