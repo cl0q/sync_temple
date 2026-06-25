@@ -32,7 +32,8 @@ const (
 	PerFileUploadTimeout = 5 * time.Minute
 )
 
-//go:embed static/**
+//go:embed static/*
+//go:embed static/_next/**
 var staticFS embed.FS
 
 type server struct {
