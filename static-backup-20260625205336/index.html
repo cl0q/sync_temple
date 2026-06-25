@@ -1,0 +1,1165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sync Temple</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0d1117;--surface:#161b22;--border:#30363d;
+  --text:#c9d1d9;--dim:#8b949e;--accent:#58a6ff;
+  --danger:#f85149;--success:#3fb950;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+header{display:flex;justify-content:space-between;align-items:center;padding:10px 20px;border-bottom:1px solid var(--border);background:var(--surface)}
+header h1{font-size:15px;font-weight:600;letter-spacing:0.5px}
+#auth{display:flex;gap:8px;align-items:center}
+input,textarea,button,select{font-family:inherit;font-size:13px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 12px;outline:none}
+input:focus,textarea:focus{border-color:var(--accent)}
+button{cursor:pointer;background:var(--surface);transition:border-color .15s}
+button:hover{border-color:var(--accent)}
+button.primary{background:#238636;border-color:#238636;color:#fff}
+button.primary:hover{background:#2ea043}
+button.danger{color:var(--danger)}
+button.danger:hover{border-color:var(--danger)}
+#toolbar{padding:6px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);background:var(--surface);font-size:12px}
+main{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);min-height:calc(100vh - 90px)}
+.channel{background:var(--bg);padding:16px;display:flex;flex-direction:column;gap:12px}
+.channel h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
+.drop-zone{border:2px dashed var(--border);border-radius:8px;padding:28px 16px;text-align:center;color:var(--dim);cursor:pointer;transition:all .2s;font-size:13px}
+.drop-zone:hover,.drop-zone.dragover{border-color:var(--accent);color:var(--accent);background:rgba(88,166,255,.04)}
+.drop-zone label{cursor:pointer;color:var(--accent);text-decoration:underline}
+.drop-zone input[type=file]{display:none}
+.status-bar{font-size:12px;color:var(--dim);min-height:18px;transition:color .3s}
+.file-list{flex:1;overflow-y:auto;max-height:280px;font-size:11px;font-family:'SF Mono','Fira Code','Cascadia Code',monospace;background:var(--surface);border-radius:6px;padding:8px 10px;line-height:1.7}
+.file-list .f{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.file-list .f .sz{color:var(--border);margin-left:6px}
+.file-list em{color:var(--border)}
+.actions{display:flex;gap:8px;align-items:center}
+.actions .count{font-size:11px;color:var(--dim);margin-left:auto}
+.text-section{display:flex;flex-direction:column;gap:6px}
+.text-section h3{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:0.5px}
+.text-section textarea{min-height:90px;resize:vertical;font-family:'SF Mono','Fira Code',monospace;font-size:12px;line-height:1.5}
+.text-actions{display:flex;gap:8px}
+.modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;align-items:center;justify-content:center}
+.modal.active{display:flex}
+.modal-body{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;width:420px;max-width:90vw}
+.modal-body h3{margin-bottom:10px;font-size:14px}
+.modal-body p{font-size:12px;color:var(--dim);margin-bottom:8px}
+.modal-body textarea{width:100%;font-family:'SF Mono',monospace;font-size:12px}
+.modal-actions{display:flex;gap:8px;margin-top:12px;justify-content:flex-end}
+.modal-wide{width:720px}
+.tree-summary{font-size:12px;color:var(--dim);margin:6px 0 10px}
+.tree-summary b{color:var(--text)}
+.tree-toolbar{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+.tree-toolbar button{font-size:11px;padding:4px 10px}
+.tree{max-height:50vh;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px;font-family:'SF Mono','Fira Code',monospace;font-size:12px;line-height:1.6}
+.tree-row{display:flex;align-items:center;gap:6px;padding:1px 4px;border-radius:3px;white-space:nowrap}
+.tree-row:hover{background:rgba(88,166,255,.06)}
+.tree-row .caret{display:inline-block;width:12px;text-align:center;color:var(--dim);cursor:pointer;user-select:none;flex-shrink:0}
+.tree-row .caret.leaf{color:var(--border);cursor:default}
+.tree-row input[type=checkbox]{margin:0;cursor:pointer;flex-shrink:0}
+.tree-row .name{cursor:pointer;flex:1;overflow:hidden;text-overflow:ellipsis}
+.tree-row .name.dir{color:var(--accent)}
+.tree-row .meta{color:var(--dim);font-size:11px;flex-shrink:0;margin-left:6px}
+.tree-row .meta.big{color:#d29922}
+.tree-row .meta.huge{color:var(--danger)}
+.tree-children{margin-left:16px;border-left:1px solid var(--border);padding-left:4px}
+.tree-more{color:var(--dim);font-style:italic;padding:2px 4px;font-size:11px;cursor:pointer}
+.tree-more:hover{color:var(--accent)}
+.upload-progress{margin:6px 0;font-size:12px;display:none}
+.upload-progress.active{display:block}
+.upload-progress progress{width:100%;height:6px}
+.upload-progress .label{display:flex;justify-content:space-between;color:var(--dim);margin:4px 0;font-size:11px}
+.upload-progress .upload-files{max-height:200px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px;font-family:'SF Mono','Fira Code','Cascadia Code',monospace;font-size:12px;line-height:1.6}
+.upload-progress .uf-row{display:flex;align-items:center;gap:8px;padding:1px 4px;border-radius:3px;white-space:nowrap}
+.upload-progress .uf-row:hover{background:rgba(88,166,255,.06)}
+.upload-progress .uf-row .p{flex:1;overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.upload-progress .uf-row .s{flex-shrink:0;font-size:10px;padding:1px 6px;border-radius:3px;border:1px solid var(--border)}
+.upload-progress .uf-row .s.pending{color:var(--dim)}
+.upload-progress .uf-row .s.uploading{color:var(--accent);border-color:var(--accent)}
+.upload-progress .uf-row .s.done{color:var(--success);border-color:var(--success)}
+.upload-progress .uf-row .s.failed{color:var(--danger);border-color:var(--danger)}
+.upload-progress .uf-row .s.retrying{color:#d29922;border-color:#d29922}
+.upload-progress .upload-actions{margin-top:6px;display:flex;gap:8px;justify-content:flex-end}
+@media(max-width:768px){main{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Sync Temple</h1>
+  <div id="auth">
+    <input type="password" id="token-input" placeholder="token" autocomplete="off" style="width:220px" />
+    <button onclick="connect()" class="primary">Connect</button>
+  </div>
+</header>
+
+<div id="app" style="display:none">
+  <div id="toolbar">
+    <span id="conn-status"></span>
+    <div style="display:flex;gap:12px;align-items:center">
+      <label style="font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer">
+        <input type="checkbox" id="sync-all-check" onchange="toggleSyncAll()" /> Sync All
+      </label>
+      <button onclick="showIgnoreModal()" style="font-size:11px;padding:3px 10px">Ignore Patterns</button>
+    </div>
+  </div>
+  <main>
+    <div class="channel" id="ch-a">
+      <h2>Channel A</h2>
+      <div class="drop-zone" id="drop-a">
+        Drop folder here or <label>browse<input type="file" id="input-a" webkitdirectory multiple /></label>
+      </div>
+      <div class="status-bar" id="status-a"></div>
+      <div class="upload-progress" id="upload-progress-a">
+        <progress id="upload-bar-a" value="0" max="1"></progress>
+        <div class="label"><span id="upload-counts-a">0 / 0</span><span id="upload-pct-a">0%</span></div>
+        <div class="upload-files" id="upload-files-a"></div>
+        <div class="upload-actions"><button onclick="cancelUpload('a')" class="danger" id="upload-cancel-a">Cancel</button></div>
+      </div>
+      <div class="file-list" id="files-a"><em>empty</em></div>
+      <div class="actions">
+        <button onclick="downloadAll('a')">Download ZIP</button>
+        <button onclick="clearChannel('a')" class="danger">Clear</button>
+        <span class="count" id="count-a"></span>
+      </div>
+      <div class="text-section">
+        <h3>Quick Text</h3>
+        <textarea id="text-a" placeholder="Paste logs, notes, errors..."></textarea>
+        <div class="text-actions">
+          <button onclick="pushText('a')">Push</button>
+          <button onclick="pullText('a')">Pull</button>
+        </div>
+      </div>
+    </div>
+    <div class="channel" id="ch-b">
+      <h2>Channel B</h2>
+      <div class="drop-zone" id="drop-b">
+        Drop folder here or <label>browse<input type="file" id="input-b" webkitdirectory multiple /></label>
+      </div>
+      <div class="status-bar" id="status-b"></div>
+      <div class="upload-progress" id="upload-progress-b">
+        <progress id="upload-bar-b" value="0" max="1"></progress>
+        <div class="label"><span id="upload-counts-b">0 / 0</span><span id="upload-pct-b">0%</span></div>
+        <div class="upload-files" id="upload-files-b"></div>
+        <div class="upload-actions"><button onclick="cancelUpload('b')" class="danger" id="upload-cancel-b">Cancel</button></div>
+      </div>
+      <div class="file-list" id="files-b"><em>empty</em></div>
+      <div class="actions">
+        <button onclick="downloadAll('b')">Download ZIP</button>
+        <button onclick="clearChannel('b')" class="danger">Clear</button>
+        <span class="count" id="count-b"></span>
+      </div>
+      <div class="text-section">
+        <h3>Quick Text</h3>
+        <textarea id="text-b" placeholder="Paste logs, notes, errors..."></textarea>
+        <div class="text-actions">
+          <button onclick="pushText('b')">Push</button>
+          <button onclick="pullText('b')">Pull</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="modal" id="ignore-modal">
+  <div class="modal-body">
+    <h3>Ignore Patterns</h3>
+    <p>One per line. Matches directory names, filenames, or *.ext globs.</p>
+    <textarea id="ignore-input" rows="16"></textarea>
+    <div class="modal-actions">
+      <button onclick="closeIgnoreModal()">Cancel</button>
+      <button onclick="saveIgnore()" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="picker-modal">
+  <div class="modal-body modal-wide">
+    <h3>Select files to sync</h3>
+    <div class="tree-summary" id="picker-summary"></div>
+    <div class="tree-toolbar">
+      <button onclick="pickerSelectAll(true)">Select all</button>
+      <button onclick="pickerSelectAll(false)">Deselect all</button>
+      <button onclick="pickerSkipLargest()">Skip largest folder</button>
+      <button onclick="pickerExpandAll(true)">Expand all</button>
+      <button onclick="pickerExpandAll(false)">Collapse all</button>
+    </div>
+    <div class="tree" id="picker-tree"></div>
+    <div class="modal-actions">
+      <button onclick="closePicker()">Cancel</button>
+      <button onclick="confirmPicker()" class="primary" id="picker-confirm">Upload selected</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const DEFAULT_IGNORE = [
+  // deps / bundled runtimes
+  'node_modules','venv','.venv','archive',
+  // build output
+  'build','dist','target','obj',
+  // gradle/kotlin/android
+  '.gradle','.kotlin',
+  // platformio
+  '.pio',
+  // sveltekit
+  '.svelte-kit',
+  // unity
+  'Library','UserSettings',
+  // ide
+  '.idea','.vscode','.vs','xcuserdata',
+  // caches
+  '.cache','.next','.turbo','.parcel-cache',
+  'coverage','__pycache__','.pytest_cache',
+  'artwork_cache','transcode_cache',
+  // files
+  '.DS_Store','local.properties','.env',
+  '*.pyc','*.o','*.a','*.so','*.dylib',
+  '*.class','*.jar','*.apk','*.elf','*.iml','*.log',
+  '*.db',
+  '*.m4a','*.mp3','*.flac','*.pcm','*.wav','*.ogg',
+  '*.png','*.jpg','*.jpeg','*.gif','*.ico','*.svg',
+  '*.pdf','*.blend'
+];
+
+let token = '';
+let ignorePatterns = JSON.parse(localStorage.getItem('sync_ignore') || 'null') || [...DEFAULT_IGNORE];
+let syncAll = localStorage.getItem('sync_all') === 'true';
+let eventSources = {};
+
+// --- Upload tuning constants (D-01, D-03, D-16) ---
+const UPLOAD_CONCURRENCY = 4;
+const RETRY_DELAYS = [1000, 3000, 10000];
+let uploadController = null;   // AbortController for the active upload, or null
+let uploadProgress = null;     // { ch, total, done, failed, files: Map }
+let uploadRenderScheduled = false;
+let auth401Handled = false;       // guard against 401-storm: re-prompt user once, not N times
+
+// --- Auth ---
+
+function connect() {
+  token = document.getElementById('token-input').value.trim();
+  if (!token) return;
+  sessionStorage.setItem('sync_token', token);
+  api('GET', '/api/a/files').then(() => {
+    auth401Handled = false;  // fresh session — re-enable the storm guard for next 401
+    document.getElementById('auth').innerHTML = '<span style="color:var(--success);font-size:12px">connected</span>';
+    document.getElementById('app').style.display = '';
+    document.getElementById('conn-status').innerHTML = '<span style="color:var(--success)">&#9679;</span> connected';
+    document.getElementById('sync-all-check').checked = syncAll;
+    initChannels();
+  }).catch(() => {
+    alert('Connection failed. Check token and server URL.');
+  });
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  token = sessionStorage.getItem('sync_token') || '';
+  if (token) {
+    document.getElementById('token-input').value = token;
+    connect();
+  }
+  document.getElementById('ignore-input').value = ignorePatterns.join('\n');
+
+  for (const ch of ['a','b']) {
+    const zone = document.getElementById('drop-' + ch);
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+    zone.addEventListener('drop', async e => {
+      e.preventDefault();
+      zone.classList.remove('dragover');
+      const files = await getFilesFromDrop(e.dataTransfer);
+      if (files.length) openPicker(ch, files);
+    });
+    document.getElementById('input-' + ch).addEventListener('change', function() {
+      const files = getFilesFromInput(this.files);
+      if (files.length) openPicker(ch, files);
+      this.value = '';
+    });
+  }
+  renderResumeButton('a');
+  renderResumeButton('b');
+});
+
+// --- API ---
+
+async function api(method, path, body, extraHeaders) {
+  const headers = { 'Authorization': 'Bearer ' + token };
+  if (extraHeaders) Object.assign(headers, extraHeaders);
+  const opts = { method, headers };
+  if (body !== undefined) {
+    if (body instanceof FormData) {
+      opts.body = body;
+    } else if (typeof body === 'object' && !(body instanceof Blob)) {
+      opts.body = JSON.stringify(body);
+      headers['Content-Type'] = 'application/json';
+    } else {
+      opts.body = body;
+    }
+  }
+  if (headers.__signal) {
+    opts.signal = headers.__signal;
+    delete headers.__signal;
+  }
+  const resp = await fetch(path, opts);
+  // 401 storm guard (D-Phase-1.1): clear stale token, abort in-flight, re-prompt once.
+  if (resp.status === 401 && !auth401Handled && sessionStorage.getItem('sync_token')) {
+    auth401Handled = true;
+    sessionStorage.removeItem('sync_token');
+    token = '';
+    // Cancel any in-flight upload so the remaining requests don't spam more 401s
+    if (typeof uploadController !== 'undefined' && uploadController) {
+      try { uploadController.abort(); } catch (_) {}
+    }
+    // Hide upload progress containers
+    for (const ch of ['a','b']) {
+      const el = document.getElementById('upload-progress-' + ch);
+      if (el) el.style.display = 'none';
+    }
+    // Re-prompt: show auth gate
+    const auth = document.getElementById('auth');
+    const app = document.getElementById('app');
+    if (auth) {
+      auth.innerHTML = '<span style="color:var(--danger);font-size:12px">Server rejected token — re-enter credentials</span>';
+    }
+    if (app) app.style.display = 'none';
+    const input = document.getElementById('token-input');
+    if (input) {
+      input.value = '';
+      input.focus();
+      input.scrollIntoView({behavior:'smooth', block:'center'});
+    }
+    // Throw with a clean message so the caller's catch doesn't double-handle
+    const e = new Error('401: token rejected — re-enter credentials');
+    e.status = 401;
+    e.code = 'AUTH_REJECTED';
+    throw e;
+  }
+  if (!resp.ok) {
+    const ct = resp.headers.get('Content-Type') || '';
+    if (ct.startsWith('application/json')) {
+      let payload;
+      try { payload = await resp.json(); } catch (_) { payload = {}; }
+      const e = new Error(payload.error || ('HTTP ' + resp.status));
+      e.status = resp.status;
+      e.code = payload.code;
+      throw e;
+    }
+    let txt = '';
+    try { txt = await resp.text(); } catch (_) { /* ignore */ }
+    const e = new Error('HTTP ' + resp.status + (txt ? ': ' + txt.slice(0, 200) : ''));
+    e.status = resp.status;
+    throw e;
+  }
+  return resp;
+}
+
+// --- Ignore ---
+
+function toggleSyncAll() {
+  syncAll = document.getElementById('sync-all-check').checked;
+  localStorage.setItem('sync_all', syncAll);
+}
+
+function isIgnored(path) {
+  const parts = path.split('/');
+  const fname = parts[parts.length - 1];
+  
+  // ALWAYS ignore .claude/worktrees, .claude/sessions, .claude/threads (even with Sync All)
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (parts[i] === 'worktrees' && i > 0 && parts[i-1] === '.claude') return true;
+    if (parts[i] === 'sessions' && i > 0 && parts[i-1] === '.claude') return true;
+    if (parts[i] === 'threads' && i > 0 && parts[i-1] === '.claude') return true;
+  }
+  
+  if (syncAll) return false;
+  
+  for (const pat of ignorePatterns) {
+    if (!pat || pat.startsWith('#')) continue;
+    if (pat.startsWith('*.')) {
+      if (fname.endsWith(pat.slice(1))) return true;
+    } else {
+      if (parts.includes(pat)) return true;
+      if (fname === pat) return true;
+    }
+  }
+  return false;
+}
+
+// --- Hashing ---
+
+async function sha256(buffer) {
+  const hash = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
+// --- File reading ---
+
+function getFilesFromInput(fileList) {
+  const out = [];
+  for (const file of fileList) {
+    // webkitRelativePath is "Folder/sub/file.txt"
+    const parts = file.webkitRelativePath.split('/');
+    if (parts.length <= 1) continue;
+    const path = parts.slice(1).join('/');
+    if (path && !isIgnored(path)) {
+      out.push({ file, path });
+    }
+  }
+  return out;
+}
+
+async function traverseEntry(entry, basePath) {
+  if (entry.isFile) {
+    return new Promise((resolve, reject) => {
+      entry.file(
+        f => resolve([{ file: f, path: basePath + f.name }]),
+        e => { console.warn('File read error:', basePath + entry.name, e); resolve([]); }
+      );
+    });
+  }
+  if (entry.isDirectory) {
+    const reader = entry.createReader();
+    let results = [];
+    while (true) {
+      const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+      if (batch.length === 0) break;
+      for (const child of batch) {
+        const childFiles = await traverseEntry(child, basePath + entry.name + '/');
+        results.push(...childFiles);
+      }
+    }
+    return results;
+  }
+  return [];
+}
+
+async function getFilesFromDrop(dt) {
+  const allFiles = [];
+  for (const item of dt.items) {
+    const entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
+    if (!entry) continue;
+    
+    const files = await traverseEntry(entry, '');
+    // If we dropped a folder "Foo", paths are "Foo/bar.txt"
+    // We want the remote path to be "bar.txt"
+    const prefix = entry.isDirectory ? entry.name + '/' : '';
+    
+    for (const f of files) {
+      const path = prefix ? f.path.slice(prefix.length) : f.path;
+      if (path && !isIgnored(path)) {
+        allFiles.push({ file: f.file, path });
+      }
+    }
+  }
+  return allFiles;
+}
+
+// --- File picker (pre-upload tree) ---
+
+let pickerCh = null;
+let pickerFiles = [];
+let pickerTree = null;
+let pickerExcluded = new Set(); // paths (file or dir) explicitly excluded
+let pickerExpanded = new Set([''/* root */]);
+
+function openPicker(ch, files) {
+  pickerCh = ch;
+  pickerFiles = files;
+  pickerExcluded = new Set();
+  pickerExpanded = new Set(['']);
+  pickerTree = buildTree(files);
+  for (const name of Object.keys(pickerTree.children)) pickerExpanded.add(name);
+  bindPickerEvents();
+  renderPicker();
+  document.getElementById('picker-modal').classList.add('active');
+}
+
+let pickerEventsBound = false;
+function bindPickerEvents() {
+  if (pickerEventsBound) return;
+  pickerEventsBound = true;
+  const tree = document.getElementById('picker-tree');
+  tree.addEventListener('click', e => {
+    const t = e.target;
+    if (t.dataset.act !== 'toggle') return;
+    const path = t.closest('.tree-row')?.dataset.path;
+    if (path === undefined) return;
+    togglePickerExpand(path);
+  });
+  tree.addEventListener('change', e => {
+    const t = e.target;
+    if (t.dataset.act !== 'check') return;
+    const path = t.closest('.tree-row')?.dataset.path;
+    if (path === undefined) return;
+    onPickerCheck(path, t.checked);
+  });
+}
+
+function closePicker() {
+  document.getElementById('picker-modal').classList.remove('active');
+  pickerFiles = [];
+  pickerTree = null;
+}
+
+function buildTree(files) {
+  const root = { name: '', children: {}, isFile: false };
+  for (const f of files) {
+    const parts = f.path.split('/');
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const seg = parts[i];
+      if (!node.children[seg]) node.children[seg] = { name: seg, children: {}, isFile: false };
+      node = node.children[seg];
+    }
+    const fname = parts[parts.length - 1];
+    node.children[fname] = { name: fname, isFile: true, size: f.file.size, fileEntry: f };
+  }
+  function compute(node) {
+    if (node.isFile) return { size: node.size, count: 1 };
+    let s = 0, c = 0;
+    for (const child of Object.values(node.children)) {
+      const r = compute(child);
+      s += r.size;
+      c += r.count;
+    }
+    node.size = s;
+    node.count = c;
+    return { size: s, count: c };
+  }
+  compute(root);
+  return root;
+}
+
+function isPathExcluded(path) {
+  if (pickerExcluded.has(path)) return true;
+  for (const ex of pickerExcluded) {
+    if (ex && path.startsWith(ex + '/')) return true;
+  }
+  return false;
+}
+
+function pickerStats() {
+  let totalCount = 0, totalSize = 0, selCount = 0, selSize = 0;
+  for (const f of pickerFiles) {
+    totalCount++;
+    totalSize += f.file.size;
+    if (!isPathExcluded(f.path)) {
+      selCount++;
+      selSize += f.file.size;
+    }
+  }
+  return { totalCount, totalSize, selCount, selSize };
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+}
+
+function sizeClass(bytes) {
+  if (bytes >= 1073741824) return 'huge';   // >=1 GB
+  if (bytes >= 104857600) return 'big';     // >=100 MB
+  return '';
+}
+
+// returns 'all' | 'none' | 'some'
+function nodeCheckState(node, path) {
+  if (node.isFile) return isPathExcluded(path) ? 'none' : 'all';
+  let any = false, all = true;
+  for (const [k, child] of Object.entries(node.children)) {
+    const childPath = path ? path + '/' + k : k;
+    const st = nodeCheckState(child, childPath);
+    if (st !== 'none') any = true;
+    if (st !== 'all') all = false;
+  }
+  return all ? 'all' : (any ? 'some' : 'none');
+}
+
+function setNodeChecked(path, checked) {
+  // remove any sub-paths from the excluded set; manage at this level
+  for (const ex of [...pickerExcluded]) {
+    if (ex === path || ex.startsWith(path + '/') || (path && path.startsWith(ex + '/'))) {
+      pickerExcluded.delete(ex);
+    }
+  }
+  if (!checked) pickerExcluded.add(path);
+}
+
+function renderPicker() {
+  const tree = document.getElementById('picker-tree');
+  tree.innerHTML = renderChildren(pickerTree, '');
+  updatePickerSummary();
+}
+
+const RENDER_LIMIT = 300; // cap visible children per folder
+
+function renderChildren(node, path) {
+  const entries = Object.entries(node.children);
+  // sort: dirs first (by size desc), then files (by size desc)
+  entries.sort((a, b) => {
+    if (a[1].isFile !== b[1].isFile) return a[1].isFile ? 1 : -1;
+    return b[1].size - a[1].size;
+  });
+  const limited = entries.length > RENDER_LIMIT ? entries.slice(0, RENDER_LIMIT) : entries;
+  let html = '';
+  for (const [k, child] of limited) {
+    html += renderRow(child, path ? path + '/' + k : k);
+  }
+  if (limited.length < entries.length) {
+    html += `<div class="tree-more">… ${entries.length - limited.length} more items hidden</div>`;
+  }
+  return html;
+}
+
+function renderRow(node, path) {
+  const state = nodeCheckState(node, path);
+  const checked = state === 'all' ? 'checked' : '';
+  const indeterminate = state === 'some' ? 'data-indet="1"' : '';
+  const isDir = !node.isFile;
+  const expanded = pickerExpanded.has(path);
+  const caretChar = isDir ? (expanded ? '▾' : '▸') : '·';
+  const caretCls = isDir ? 'caret' : 'caret leaf';
+  const caretAct = isDir ? 'data-act="toggle"' : '';
+  const sc = sizeClass(node.size);
+  const meta = isDir
+    ? `${node.count} file${node.count === 1 ? '' : 's'}, ${fmtBytes(node.size)}`
+    : fmtBytes(node.size);
+  const nameAct = isDir ? 'data-act="toggle"' : '';
+  const row = `
+    <div class="tree-row" data-path="${escA(path)}">
+      <span class="${caretCls}" ${caretAct}>${caretChar}</span>
+      <input type="checkbox" ${checked} ${indeterminate} data-act="check" />
+      <span class="name ${isDir ? 'dir' : ''}" ${nameAct}>${esc(node.name)}${isDir ? '/' : ''}</span>
+      <span class="meta ${sc}">${meta}</span>
+    </div>`;
+  if (isDir && expanded) {
+    return row + `<div class="tree-children">${renderChildren(node, path)}</div>`;
+  }
+  return row;
+}
+
+function escA(s) { return esc(s).replace(/"/g, '&quot;'); }
+
+function togglePickerExpand(path) {
+  if (pickerExpanded.has(path)) pickerExpanded.delete(path);
+  else pickerExpanded.add(path);
+  renderPicker();
+}
+
+function onPickerCheck(path, checked) {
+  setNodeChecked(path, checked);
+  renderPicker();
+}
+
+function pickerSelectAll(selected) {
+  pickerExcluded = new Set();
+  if (!selected) {
+    for (const name of Object.keys(pickerTree.children)) pickerExcluded.add(name);
+  }
+  renderPicker();
+}
+
+function pickerSkipLargest() {
+  let largest = null, largestSize = -1;
+  for (const [k, child] of Object.entries(pickerTree.children)) {
+    if (!child.isFile && child.size > largestSize) {
+      largest = k;
+      largestSize = child.size;
+    }
+  }
+  if (largest) {
+    pickerExcluded.add(largest);
+    if (!pickerExpanded.has(largest)) pickerExpanded.add(largest);
+    renderPicker();
+  }
+}
+
+function pickerExpandAll(expand) {
+  if (!expand) {
+    pickerExpanded = new Set();
+    renderPicker();
+    return;
+  }
+  pickerExpanded = new Set();
+  function walk(node, path) {
+    if (node.isFile) return;
+    pickerExpanded.add(path);
+    for (const [k, child] of Object.entries(node.children)) {
+      walk(child, path ? path + '/' + k : k);
+    }
+  }
+  walk(pickerTree, '');
+  renderPicker();
+}
+
+function updatePickerSummary() {
+  const s = pickerStats();
+  const el = document.getElementById('picker-summary');
+  el.innerHTML = `<b>${s.selCount.toLocaleString()}</b> / ${s.totalCount.toLocaleString()} files selected — <b>${fmtBytes(s.selSize)}</b> / ${fmtBytes(s.totalSize)} → Channel ${pickerCh.toUpperCase()}`;
+  // Update indeterminate state on checkboxes (can't be set via attribute)
+  for (const cb of document.querySelectorAll('#picker-tree input[type=checkbox]')) {
+    cb.indeterminate = cb.hasAttribute('data-indet');
+  }
+  document.getElementById('picker-confirm').disabled = s.selCount === 0;
+}
+
+async function confirmPicker() {
+  const selected = pickerFiles.filter(f => !isPathExcluded(f.path));
+  const ch = pickerCh;
+  closePicker();
+  if (selected.length) await uploadFiles(ch, selected);
+}
+
+// --- Upload with diff ---
+
+async function uploadFiles(ch, files) {
+  const status = document.getElementById('status-' + ch);
+  status.style.color = '';
+
+  // D-07: starting a new upload clears any prior resume marker for THIS channel.
+  const savedResume = loadResumeState(ch);
+  clearResumeState(ch);
+
+  // Cancel any in-flight upload on the same channel
+  if (uploadController) {
+    try { uploadController.abort(); } catch (_) {}
+  }
+  uploadController = new AbortController();
+
+  try {
+    // Hash
+    status.textContent = 'Hashing ' + files.length + ' files...';
+    const manifest = {};
+    let hashErrors = 0;
+    const skippedFiles = [];
+    for (let i = 0; i < files.length; i++) {
+      if (uploadController.signal.aborted) throw new Error('cancelled');
+      try {
+        const prev = savedResume && savedResume.manifest && savedResume.manifest[files[i].path];
+        // Reuse saved hash when the user re-selects the same folder; size-stable assumption.
+        if (prev) {
+          manifest[files[i].path] = prev;
+        } else {
+          manifest[files[i].path] = await sha256(await files[i].file.arrayBuffer());
+        }
+      } catch (e) {
+        hashErrors++;
+        skippedFiles.push(files[i].path);
+        console.warn('Hash error for', files[i].path, e);
+      }
+      if (i % 10 === 0 || i === files.length - 1) {
+        status.textContent = 'Hashing ' + (i+1) + '/' + files.length + '...';
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+    if (hashErrors > 0) {
+      console.warn('Skipped files due to I/O errors:', skippedFiles);
+    }
+
+    // Diff
+    status.textContent = 'Computing diff...';
+    const diff = await api('POST', '/api/' + ch + '/diff', { files: manifest }).then(r => r.json());
+    const toUpload = [...(diff.client_only||[]), ...(diff.different||[])];
+    const same = diff.same || 0;
+
+    if (toUpload.length === 0) {
+      status.textContent = 'No changes. ' + same + ' files identical.';
+      status.style.color = 'var(--success)';
+      uploadController = null;
+      return;
+    }
+
+    // Build upload set as [{path, file}]
+    const uploadSet = [];
+    for (const p of toUpload) {
+      const entry = files.find(f => f.path === p);
+      if (entry) uploadSet.push(entry);
+    }
+
+    // Init progress
+    uploadProgress = {
+      ch,
+      total: uploadSet.length,
+      done: 0,
+      failed: 0,
+      files: new Map(uploadSet.map(e => [e.path, { state: 'pending', attempt: 0, error: '' }])),
+      started_at: new Date().toISOString(),
+      manifest: manifest,
+    };
+    showUploadProgress(ch);
+    renderUploadProgress();
+
+    // Run the queue (per-file POSTs, UPLOAD_CONCURRENCY workers — D-01)
+    status.textContent = 'Uploading ' + uploadSet.length + ' files...';
+    await runUploadQueue(ch, uploadSet, uploadController.signal);
+
+    // Summary
+    const okCount = uploadProgress.done;
+    const failCount = uploadProgress.failed;
+    if (failCount === 0) {
+      status.textContent = okCount + ' uploaded, ' + same + ' unchanged';
+      status.style.color = 'var(--success)';
+      hideUploadProgress(ch);
+      clearResumeState(ch);
+    } else {
+      status.textContent = okCount + ' uploaded, ' + failCount + ' failed, ' + same + ' unchanged';
+      status.style.color = 'var(--danger)';
+      // Keep progress UI visible so the user can see which files failed.
+      persistResumeState(ch, true);
+    }
+    refreshFiles(ch);
+  } catch (err) {
+    if (err.message === 'cancelled' || uploadController?.signal.aborted) {
+      status.textContent = 'Upload cancelled.';
+      status.style.color = 'var(--danger)';
+      persistResumeState(ch, true);
+    } else {
+      status.textContent = 'Error: ' + err.message;
+      status.style.color = 'var(--danger)';
+    }
+  } finally {
+    uploadController = null;
+    renderResumeButton(ch);
+  }
+}
+
+// --- Upload queue + retry (Plan 02, D-01..D-04, D-08..D-09) ---
+
+async function runUploadQueue(ch, uploadSet, signal) {
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      if (signal.aborted) return;
+      const idx = cursor++;
+      if (idx >= uploadSet.length) return;
+      const entry = uploadSet[idx];
+      try {
+        await uploadOneFile(ch, entry, signal);
+        const st = uploadProgress.files.get(entry.path);
+        st.state = 'done';
+        uploadProgress.done++;
+        persistResumeState(ch, false);
+      } catch (err) {
+        const st = uploadProgress.files.get(entry.path);
+        st.state = 'failed';
+        st.error = err.message || String(err);
+        uploadProgress.failed++;
+        persistResumeState(ch, false);
+      }
+      scheduleProgressRender();
+    }
+  }
+  const workers = [];
+  for (let i = 0; i < UPLOAD_CONCURRENCY; i++) workers.push(worker());
+  await Promise.all(workers);
+  // Force a final flush
+  renderUploadProgress();
+}
+
+async function uploadOneFile(ch, entry, signal) {
+  const path = entry.path;
+  const st = uploadProgress.files.get(path);
+  for (let attempt = 1; attempt <= RETRY_DELAYS.length + 1; attempt++) {
+    if (signal.aborted) throw new Error('cancelled');
+    st.attempt = attempt;
+    st.state = attempt === 1 ? 'uploading' : 'retrying';
+    scheduleProgressRender();
+
+    const fd = new FormData();
+    fd.append(path, entry.file);
+    let r;
+    try {
+      const resp = await api('POST', '/api/' + ch + '/upload', fd, { __signal: signal });
+      r = await resp.json();
+    } catch (err) {
+      if (signal.aborted || err.name === 'AbortError') throw new Error('cancelled');
+      // Retry decision
+      if (shouldRetry(err) && attempt <= RETRY_DELAYS.length) {
+        st.error = err.message;
+        await abortableSleep(RETRY_DELAYS[attempt - 1], signal);
+        continue;
+      }
+      throw err;
+    }
+    // 200 OK + uploaded:1 → success
+    if ((r.uploaded || 0) >= 1) {
+      return;
+    }
+    // 200 OK but server reports in-band failure
+    const firstErr = (r.errors && r.errors[0]) || {};
+    const inBandRetriable = firstErr.code === 'TIMEOUT' || firstErr.code === 'INTERNAL';
+    if (inBandRetriable && attempt <= RETRY_DELAYS.length) {
+      st.error = firstErr.message || firstErr.code || 'server failure';
+      await abortableSleep(RETRY_DELAYS[attempt - 1], signal);
+      continue;
+    }
+    // Non-retriable in-band failure → throw
+    const e = new Error(firstErr.message || firstErr.code || 'upload failed');
+    e.code = firstErr.code;
+    throw e;
+  }
+  throw new Error('retries exhausted');
+}
+
+function shouldRetry(err) {
+  // No .status => network error (fetch threw). Retry.
+  if (err.status === undefined) return true;
+  if (err.status >= 500) return true;
+  if (err.status === 408) return true;
+  // 4xx other than 408: no retry (D-03).
+  return false;
+}
+
+function abortableSleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new Error('cancelled'));
+    const t = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(t);
+      signal.removeEventListener('abort', onAbort);
+      reject(new Error('cancelled'));
+    }
+    signal.addEventListener('abort', onAbort);
+  });
+}
+
+function scheduleProgressRender() {
+  if (uploadRenderScheduled) return;
+  uploadRenderScheduled = true;
+  // ~200ms throttle for the file list; rAF for the bar (D-09).
+  setTimeout(() => {
+    uploadRenderScheduled = false;
+    renderUploadProgress();
+  }, 200);
+  requestAnimationFrame(() => updateProgressBar());
+}
+
+function updateProgressBar() {
+  if (!uploadProgress) return;
+  const ch = uploadProgress.ch;
+  const bar = document.getElementById('upload-bar-' + ch);
+  if (!bar) return;
+  bar.max = uploadProgress.total;
+  bar.value = uploadProgress.done + uploadProgress.failed;
+}
+
+function renderUploadProgress() {
+  if (!uploadProgress) return;
+  const ch = uploadProgress.ch;
+  updateProgressBar();
+  const counts = document.getElementById('upload-counts-' + ch);
+  const pct = document.getElementById('upload-pct-' + ch);
+  const list = document.getElementById('upload-files-' + ch);
+  if (!counts || !list) return;
+  const done = uploadProgress.done;
+  const failed = uploadProgress.failed;
+  const total = uploadProgress.total;
+  counts.textContent = (done + failed) + ' / ' + total + ' files' + (failed ? ' (' + failed + ' failed)' : '');
+  pct.textContent = total ? Math.floor(((done + failed) / total) * 100) + '%' : '0%';
+  const rows = [];
+  for (const [path, st] of uploadProgress.files) {
+    const label = st.state === 'retrying'
+      ? 'retrying ' + st.attempt + '/' + (RETRY_DELAYS.length + 1)
+      : st.state;
+    rows.push('<div class="uf-row"><span class="p">' + esc(path) + '</span><span class="s ' + st.state + '">' + esc(label) + '</span></div>');
+  }
+  list.innerHTML = rows.join('');
+}
+
+function showUploadProgress(ch) {
+  const el = document.getElementById('upload-progress-' + ch);
+  if (el) el.classList.add('active');
+}
+
+function hideUploadProgress(ch) {
+  const el = document.getElementById('upload-progress-' + ch);
+  if (el) el.classList.remove('active');
+}
+
+function cancelUpload(ch) {
+  if (uploadController && uploadProgress && uploadProgress.ch === ch) {
+    uploadController.abort();
+  }
+}
+
+// --- Resume (Plan 03, D-05..D-07) ---
+
+let lastPersistAt = 0;
+
+function resumeKey(ch) {
+  return 'sync_resume_' + ch;
+}
+
+function loadResumeState(ch) {
+  try {
+    const raw = localStorage.getItem(resumeKey(ch));
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (_) {
+    return null;
+  }
+}
+
+function clearResumeState(ch) {
+  localStorage.removeItem(resumeKey(ch));
+  renderResumeButton(ch);
+}
+
+function persistResumeState(ch, force) {
+  const now = Date.now();
+  if (!force && (now - lastPersistAt) < 500) return;
+  lastPersistAt = now;
+  if (!uploadProgress || uploadProgress.ch !== ch) return;
+  const failedPaths = [];
+  for (const [p, st] of uploadProgress.files) {
+    if (st.state === 'failed') failedPaths.push(p);
+  }
+  const payload = {
+    started_at: uploadProgress.started_at,
+    files_total: uploadProgress.total,
+    files_done: uploadProgress.done,
+    files_failed: failedPaths,
+    manifest: uploadProgress.manifest || {},
+  };
+  try {
+    localStorage.setItem(resumeKey(ch), JSON.stringify(payload));
+  } catch (e) {
+    console.warn('persistResumeState failed:', e);
+  }
+  renderResumeButton(ch);
+}
+
+function renderResumeButton(ch) {
+  const zone = document.getElementById('drop-' + ch);
+  if (!zone) return;
+  // Remove any existing resume container
+  const existing = zone.querySelector('.resume-row');
+  if (existing) existing.remove();
+  const state = loadResumeState(ch);
+  if (!state) return;
+  const remaining = (state.files_total || 0) - (state.files_done || 0);
+  const row = document.createElement('div');
+  row.className = 'resume-row';
+  row.style.cssText = 'margin-top:8px;display:flex;gap:8px;align-items:center;justify-content:center;font-size:12px;flex-wrap:wrap';
+  row.innerHTML =
+    '<span style="color:var(--dim)">' + remaining + ' / ' + (state.files_total || 0) + ' files remaining from previous attempt</span>' +
+    '<button class="primary" data-act="resume">Resume (re-select folder)</button>' +
+    '<button data-act="discard">Discard</button>';
+  row.querySelector('[data-act=resume]').addEventListener('click', (e) => { e.stopPropagation(); resumeUpload(ch); });
+  row.querySelector('[data-act=discard]').addEventListener('click', (e) => { e.stopPropagation(); clearResumeState(ch); });
+  zone.appendChild(row);
+}
+
+function resumeUpload(ch) {
+  // Re-enter the existing picker flow. The input change handler runs
+  // openPicker → confirmPicker → uploadFiles, and uploadFiles consumes
+  // the saved resume state to skip re-hashing for unchanged files.
+  const input = document.getElementById('input-' + ch);
+  if (input) input.click();
+}
+
+// --- Channel ops ---
+
+async function refreshFiles(ch) {
+  try {
+    const files = await api('GET', '/api/' + ch + '/files').then(r => r.json());
+    const el = document.getElementById('files-' + ch);
+    const paths = Object.keys(files).sort();
+    document.getElementById('count-' + ch).textContent = paths.length + ' files';
+    if (!paths.length) { el.innerHTML = '<em>empty</em>'; return; }
+    el.innerHTML = paths.map(p => {
+      const info = files[p];
+      const sz = typeof info === 'object' ? fmtSize(info.size) : '';
+      return '<div class="f">' + esc(p) + (sz ? '<span class="sz">' + sz + '</span>' : '') + '</div>';
+    }).join('');
+  } catch(e) { console.error(e); }
+}
+
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function fmtSize(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+  return (n/1048576).toFixed(1) + ' MB';
+}
+
+function downloadAll(ch) {
+  const a = document.createElement('a');
+  a.href = '/api/' + ch + '/download?token=' + encodeURIComponent(token);
+  a.download = 'channel_' + ch + '.zip';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+async function clearChannel(ch) {
+  if (!confirm('Clear all files and text in Channel ' + ch.toUpperCase() + '?')) return;
+  await api('DELETE', '/api/' + ch + '/files');
+  refreshFiles(ch);
+  document.getElementById('text-' + ch).value = '';
+  document.getElementById('status-' + ch).textContent = 'Cleared.';
+}
+
+async function pushText(ch) {
+  const text = document.getElementById('text-' + ch).value;
+  await api('POST', '/api/' + ch + '/text', text, { 'Content-Type': 'text/plain' });
+  const st = document.getElementById('status-' + ch);
+  st.textContent = 'Text pushed (' + text.length + ' chars).';
+  st.style.color = 'var(--success)';
+}
+
+async function pullText(ch) {
+  const resp = await api('GET', '/api/' + ch + '/text');
+  const text = await resp.text();
+  document.getElementById('text-' + ch).value = text;
+  const st = document.getElementById('status-' + ch);
+  st.textContent = 'Text pulled (' + text.length + ' chars).';
+  st.style.color = 'var(--success)';
+}
+
+// --- SSE live updates ---
+
+function connectSSE(ch) {
+  if (eventSources[ch]) eventSources[ch].close();
+  const es = new EventSource('/api/' + ch + '/events?token=' + encodeURIComponent(token));
+  es.onmessage = () => refreshFiles(ch);
+  es.onerror = () => {
+    es.close();
+    setTimeout(() => connectSSE(ch), 5000);
+  };
+  eventSources[ch] = es;
+}
+
+function initChannels() {
+  for (const ch of ['a','b']) {
+    refreshFiles(ch);
+    connectSSE(ch);
+  }
+}
+
+// --- Ignore modal ---
+
+function showIgnoreModal() {
+  document.getElementById('ignore-input').value = ignorePatterns.join('\n');
+  document.getElementById('ignore-modal').classList.add('active');
+}
+function closeIgnoreModal() {
+  document.getElementById('ignore-modal').classList.remove('active');
+}
+function saveIgnore() {
+  ignorePatterns = document.getElementById('ignore-input').value.split('\n').map(s => s.trim()).filter(s => s);
+  localStorage.setItem('sync_ignore', JSON.stringify(ignorePatterns));
+  closeIgnoreModal();
+}
+</script>
+</body>
+</html>
