@@ -1,14 +1,19 @@
 ---
-status: partial
+status: testing
 phase: 01-upload-reliability
 source: [01-VERIFICATION.md]
 started: 2026-05-12T00:00:00Z
-updated: 2026-05-12T00:00:00Z
+updated: 2026-05-19T00:00:00Z
 ---
 
 ## Current Test
 
-[awaiting human testing]
+number: 1
+name: 500-file Drag-and-Drop Upload (Chrome / Safari)
+expected: |
+  All files upload successfully. DevTools Console shows no WebKitBlobResource error 4.
+  DevTools Network panel shows at most 4 concurrent POST /api/a/upload requests at any time.
+awaiting: user response
 
 ## Tests
 

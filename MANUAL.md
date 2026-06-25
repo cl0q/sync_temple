@@ -2,7 +2,7 @@ SYNC TEMPLE
 ===========
 
 Server: https://sync.0xxi.cloud
-Token:  <your-token-here>
+Token:  OAO-2xmN9kET7dZxl2MS1sq94jecOIEc
 
 Token persists across server restarts:
 - Override with `--token <value>` (CLI flag wins).
